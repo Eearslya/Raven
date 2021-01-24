@@ -1,6 +1,7 @@
 #pragma once
 
 #include <SDL.h>
+#include <optional>
 #include <vector>
 #include <vulkan/vulkan.h>
 
@@ -8,6 +9,15 @@ namespace Raven {
 struct QueueFamilyInfo final {
   uint32_t Index{};
   VkQueueFamilyProperties Properties{};
+  VkBool32 PresentSupport{VK_FALSE};
+
+  constexpr bool Graphics() const { return Properties.queueFlags & VK_QUEUE_GRAPHICS_BIT; }
+  constexpr bool Compute() const { return Properties.queueFlags & VK_QUEUE_COMPUTE_BIT; }
+  constexpr bool Transfer() const { return Properties.queueFlags & VK_QUEUE_TRANSFER_BIT; }
+  constexpr bool SparseBinding() const {
+    return Properties.queueFlags & VK_QUEUE_SPARSE_BINDING_BIT;
+  }
+  constexpr bool Present() const { return PresentSupport; }
 };
 
 struct PhysicalDeviceInfo final {
@@ -15,6 +25,12 @@ struct PhysicalDeviceInfo final {
   VkPhysicalDeviceMemoryProperties MemoryProperties{};
   VkPhysicalDeviceProperties Properties{};
   std::vector<QueueFamilyInfo> QueueFamilies;
+  std::vector<VkExtensionProperties> Extensions;
+
+  std::optional<uint32_t> GraphicsIndex;
+  std::optional<uint32_t> ComputeIndex;
+  std::optional<uint32_t> TransferIndex;
+  std::optional<uint32_t> PresentIndex;
 };
 
 class Application final {
@@ -41,6 +57,7 @@ class Application final {
   VkDebugUtilsMessengerEXT mDebugger{VK_NULL_HANDLE};
   VkSurfaceKHR mSurface{VK_NULL_HANDLE};
   VkPhysicalDevice mPhysicalDevice{VK_NULL_HANDLE};
+  PhysicalDeviceInfo mDeviceInfo{};
   VkDevice mDevice{VK_NULL_HANDLE};
 };
 }  // namespace Raven

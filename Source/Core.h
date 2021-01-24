@@ -1,5 +1,7 @@
 #pragma once
 
+#define NOMINMAX
+
 #include <Windows.h>
 #include <array>
 #include <exception>
@@ -7,6 +9,7 @@
 #include <fmt/core.h>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <typeinfo>
 #include <unordered_map>

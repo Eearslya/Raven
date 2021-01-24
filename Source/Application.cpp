@@ -153,6 +153,7 @@ void Application::InitializeVulkan() {
   Log::Debug("[InitializeVulkan] Vulkan Surface created. <{}>", reinterpret_cast<void*>(mSurface));
 
   VkCall(SelectPhysicalDevice());
+  Log::Debug("[InitializeVulkan] Selected physical device: {}", mDeviceInfo.Properties.deviceName);
 }
 
 void Application::ShutdownVulkan() {
@@ -353,21 +354,116 @@ VkResult Application::SelectPhysicalDevice() noexcept {
   Log::Debug("[SelectPhysicalDevice] Found {} Vulkan devices.", physicalDeviceCount);
   std::vector<PhysicalDeviceInfo> deviceInfos(physicalDeviceCount);
 
+  std::vector<uint64_t> deviceScores(physicalDeviceCount, 0);
+
   for (uint32_t i = 0; i < physicalDeviceCount; i++) {
     VkPhysicalDevice device{physicalDevices[i]};
     PhysicalDeviceInfo& info{deviceInfos[i]};
+    uint64_t& score{deviceScores[i]};
 
     // Fill device info
     {
+      // Standard device info
       vkGetPhysicalDeviceFeatures(device, &info.Features);
       vkGetPhysicalDeviceMemoryProperties(device, &info.MemoryProperties);
       vkGetPhysicalDeviceProperties(device, &info.Properties);
+
+      // Extensions
+      uint32_t extensionCount{0};
+      vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, nullptr);
+      info.Extensions.resize(extensionCount);
+      vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount,
+                                           info.Extensions.data());
+
+      // Queue families
+      {
+        uint32_t queueCount{0};
+        vkGetPhysicalDeviceQueueFamilyProperties(device, &queueCount, nullptr);
+        std::vector<VkQueueFamilyProperties> queueFamilies(queueCount);
+        info.QueueFamilies.resize(queueCount);
+        vkGetPhysicalDeviceQueueFamilyProperties(device, &queueCount, queueFamilies.data());
+
+        for (uint32_t i = 0; i < queueCount; i++) {
+          QueueFamilyInfo& q{info.QueueFamilies[i]};
+          q.Index = i;
+          q.Properties = queueFamilies[i];
+          vkGetPhysicalDeviceSurfaceSupportKHR(device, i, mSurface, &q.PresentSupport);
+        }
+      }
+
+      // Determine queue assignments
+      {
+        // Graphics
+        for (const auto& family : info.QueueFamilies) {
+          if (family.Graphics()) {
+            info.GraphicsIndex = family.Index;
+            if (family.Present()) {
+              info.PresentIndex = family.Index;
+            }
+            break;
+          }
+        }
+
+        // Transfer
+        for (const auto& family : info.QueueFamilies) {
+          // Attempt to find a separate queue from Graphics
+          if (family.Transfer() && family.Index != info.GraphicsIndex) {
+            info.TransferIndex = family.Index;
+            break;
+          }
+        }
+        // If unable to find a separate queue, use the same one.
+        // By definition, all graphics queues are required to support Transfer,
+        // so we don't need to verify.
+        if (!info.TransferIndex.has_value()) {
+          info.TransferIndex = info.GraphicsIndex;
+        }
+
+        // Compute
+        // First attempt to find a separate queue from Graphics.
+        for (const auto& family : info.QueueFamilies) {
+          if (family.Compute() && family.Index != info.GraphicsIndex) {
+            info.ComputeIndex = family.Index;
+            break;
+          }
+        }
+        // If that fails, find any available compute queue.
+        if (!info.ComputeIndex.has_value()) {
+          for (const auto& family : info.QueueFamilies) {
+            if (family.Compute()) {
+              info.ComputeIndex = family.Index;
+              break;
+            }
+          }
+        }
+      }
     }
 
     // Dump device info to log
     {
       Log::Trace("[SelectPhysicalDevice] - Physical Device {}: \"{}\"", i,
                  info.Properties.deviceName);
+
+      // Device Type
+      {
+        switch (info.Properties.deviceType) {
+          case VK_PHYSICAL_DEVICE_TYPE_OTHER:
+            Log::Trace("[SelectPhysicalDevice]   - Type: Other");
+            break;
+          case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
+            Log::Trace("[SelectPhysicalDevice]   - Type: Integrated GPU");
+            break;
+          case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
+            Log::Trace("[SelectPhysicalDevice]   - Type: Discrete GPU");
+            break;
+          case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:
+            Log::Trace("[SelectPhysicalDevice]   - Type: Virtual GPU");
+            break;
+          case VK_PHYSICAL_DEVICE_TYPE_CPU:
+            Log::Trace("[SelectPhysicalDevice]   - Type: CPU");
+            break;
+        }
+      }
 
       // Memory Properties
       {
@@ -416,53 +512,90 @@ VkResult Application::SelectPhysicalDevice() noexcept {
 
       // Device Queues
       {
-        uint32_t queueCount{0};
-        vkGetPhysicalDeviceQueueFamilyProperties(device, &queueCount, nullptr);
-        std::vector<VkQueueFamilyProperties> queueFamilies(queueCount);
-        info.QueueFamilies.resize(queueCount);
-        vkGetPhysicalDeviceQueueFamilyProperties(device, &queueCount, queueFamilies.data());
-
         Log::Trace("[SelectPhysicalDevice]   - Device Queue Families:");
-        for (size_t i = 0; i < queueCount; i++) {
-          const VkQueueFamilyProperties& queue{queueFamilies[i]};
+        for (const auto& family : info.QueueFamilies) {
           std::string caps{""};
-          if (queue.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+          if (family.Graphics()) {
             caps += "Graphics";
+            if (family.Index == info.GraphicsIndex) {
+              caps += "*";
+            }
           }
-          if (queue.queueFlags & VK_QUEUE_COMPUTE_BIT) {
+          if (family.Compute()) {
             if (caps.size() > 0) {
               caps += ", ";
             }
             caps += "Compute";
+            if (family.Index == info.ComputeIndex) {
+              caps += "*";
+            }
           }
-          if (queue.queueFlags & VK_QUEUE_TRANSFER_BIT) {
+          if (family.Transfer()) {
             if (caps.size() > 0) {
               caps += ", ";
             }
             caps += "Transfer";
+            if (family.Index == info.TransferIndex) {
+              caps += "*";
+            }
           }
-          if (queue.queueFlags & VK_QUEUE_SPARSE_BINDING_BIT) {
+          if (family.SparseBinding()) {
             if (caps.size() > 0) {
               caps += ", ";
             }
             caps += "Sparse Binding";
           }
-          VkBool32 present{VK_FALSE};
-          vkGetPhysicalDeviceSurfaceSupportKHR(device, i, mSurface, &present);
-          if (present) {
+          if (family.Present()) {
             if (caps.size() > 0) {
               caps += ", ";
             }
             caps += "Present";
+            if (family.Index == info.PresentIndex) {
+              caps += "*";
+            }
           }
 
-          Log::Trace("[SelectPhysicalDevice]     - Family {}: {} Queues <{}>", i, queue.queueCount, caps);
+          Log::Trace("[SelectPhysicalDevice]     - Family {}: {} Queues <{}>", family.Index,
+                     family.Properties.queueCount, caps);
+        }
+      }
+
+      // Extensions
+      {
+        Log::Trace("[SelectPhysicalDevice]   - Device Extensions:");
+        for (const auto& ext : info.Extensions) {
+          Log::Trace("[SelectPhysicalDevice]     - {} v{}", ext.extensionName, ext.specVersion);
         }
       }
     }
+
+    // Score device
+    {
+      if (info.Properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
+        score += 10000;
+      }
+      score += info.Properties.limits.maxImageDimension2D;
+    }
   }
 
-  return VkResult();
+  uint64_t bestScore{0};
+  size_t bestDevice{std::numeric_limits<size_t>::max()};
+  for (uint32_t i = 0; i < physicalDeviceCount; i++) {
+    if (deviceScores[i] > bestScore) {
+      bestScore = deviceScores[i];
+      bestDevice = i;
+    }
+  }
+
+  if (bestScore == 0) {
+    Log::Fatal("[SelectPhysicalDevice] No physical device was found that meets requirements!");
+    return VK_ERROR_INCOMPATIBLE_DRIVER;
+  }
+
+  mPhysicalDevice = physicalDevices[bestDevice];
+  mDeviceInfo = deviceInfos[bestDevice];
+
+  return VK_SUCCESS;
 }
 
 void Application::EnumeratePhysicalDevice(VkPhysicalDevice device,
