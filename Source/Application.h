@@ -5,6 +5,8 @@
 #include <vector>
 #include <vulkan/vulkan.h>
 
+#include "VulkanCore.h"
+
 namespace Raven {
 struct QueueFamilyInfo final {
   uint32_t Index{};
@@ -47,9 +49,27 @@ class Application final {
   VkResult CreateDebugger() noexcept;
   VkResult CreateSurface() noexcept;
   VkResult SelectPhysicalDevice() noexcept;
+  VkResult CreateDevice() noexcept;
+  void GetQueues() noexcept;
   void EnumeratePhysicalDevice(VkPhysicalDevice device, PhysicalDeviceInfo& info) noexcept;
 
-  void SetObjectName(const VkObjectType type, const uint64_t handle, const char* name) noexcept;
+  template <typename Type>
+  void SetObjectName(const VkObjectType type, const Type handle, const char* name) noexcept {
+    static PFN_vkSetDebugUtilsObjectNameEXT func{reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(
+        vkGetInstanceProcAddr(mInstance, "vkSetDebugUtilsObjectNameEXT"))};
+    if (func && mValidation) {
+      const VkDebugUtilsObjectNameInfoEXT nameInfo{
+          VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,  // sType
+          nullptr,                                             // pNext
+          type,                                                // objectType
+          reinterpret_cast<uint64_t>(handle),                  // objectHandle
+          name                                                 // pObjectName
+      };
+      Log::Trace("[SetObjectName] {} <{}> set to \"{}\"", gVkObjectTypes.find(type)->second,
+                 reinterpret_cast<void*>(handle), name);
+      func(mDevice, &nameInfo);
+    }
+  }
 
   bool mValidation{true};
   SDL_Window* mWindow;
@@ -59,5 +79,9 @@ class Application final {
   VkPhysicalDevice mPhysicalDevice{VK_NULL_HANDLE};
   PhysicalDeviceInfo mDeviceInfo{};
   VkDevice mDevice{VK_NULL_HANDLE};
+  VkQueue mGraphicsQueue{VK_NULL_HANDLE};
+  VkQueue mPresentQueue{VK_NULL_HANDLE};
+  VkQueue mTransferQueue{VK_NULL_HANDLE};
+  VkQueue mComputeQueue{VK_NULL_HANDLE};
 };
 }  // namespace Raven

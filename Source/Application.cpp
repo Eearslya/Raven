@@ -154,9 +154,19 @@ void Application::InitializeVulkan() {
 
   VkCall(SelectPhysicalDevice());
   Log::Debug("[InitializeVulkan] Selected physical device: {}", mDeviceInfo.Properties.deviceName);
+
+  VkCall(CreateDevice());
+  Log::Debug("[InitializeVulkan] Vulkan Device created. <{}>", reinterpret_cast<void*>(mDevice));
+  SetObjectName(VK_OBJECT_TYPE_DEVICE, mDevice, "Main Device");
+
+  GetQueues();
+  Log::Debug("[InitializeVulkan] Device queues retrieved.");
 }
 
 void Application::ShutdownVulkan() {
+  vkDeviceWaitIdle(mDevice);
+
+  vkDestroyDevice(mDevice, nullptr);
   vkDestroySurfaceKHR(mInstance, mSurface, nullptr);
 
   if (mValidation) {
@@ -189,18 +199,18 @@ VkResult Application::CreateInstance(const bool validation) noexcept {
 
   // Dump enumerated information
   {
-    Log::Debug("[CreateInstance] --- Vulkan Instance Information --- ");
-    Log::Debug("[CreateInstance] - Instance Version: {}.{}.{}", VK_VERSION_MAJOR(instanceVersion),
+    Log::Trace("[CreateInstance] --- Vulkan Instance Information --- ");
+    Log::Trace("[CreateInstance] - Instance Version: {}.{}.{}", VK_VERSION_MAJOR(instanceVersion),
                VK_VERSION_MINOR(instanceVersion), VK_VERSION_PATCH(instanceVersion));
-    Log::Debug("[CreateInstance] - Available Layers:");
+    Log::Trace("[CreateInstance] - Available Layers:");
     for (const auto& layer : availableLayers) {
-      Log::Debug("[CreateInstance]   - {} v{}.{}.{}", layer.layerName,
+      Log::Trace("[CreateInstance]   - {} v{}.{}.{}", layer.layerName,
                  VK_VERSION_MAJOR(layer.specVersion), VK_VERSION_MINOR(layer.specVersion),
                  VK_VERSION_PATCH(layer.specVersion));
     }
-    Log::Debug("[CreateInstance] - Available Extensions:");
+    Log::Trace("[CreateInstance] - Available Extensions:");
     for (const auto& ext : availableExtensions) {
-      Log::Debug("[CreateInstance]   - {} v{}", ext.extensionName, ext.specVersion);
+      Log::Trace("[CreateInstance]   - {} v{}", ext.extensionName, ext.specVersion);
     }
   }
 
@@ -227,16 +237,16 @@ VkResult Application::CreateInstance(const bool validation) noexcept {
 
   // Dump Instance Information
   {
-    Log::Debug("[CreateInstance] --- Raven VkInstance Info --- ");
-    Log::Debug("[CreateInstance] - API Version: {}.{}", VK_VERSION_MAJOR(appInfo.apiVersion),
+    Log::Trace("[CreateInstance] --- Raven VkInstance Info --- ");
+    Log::Trace("[CreateInstance] - API Version: {}.{}", VK_VERSION_MAJOR(appInfo.apiVersion),
                VK_VERSION_MINOR(appInfo.apiVersion));
-    Log::Debug("[CreateInstance] - Requested Instance Layers ({}):", requiredLayers.size());
+    Log::Trace("[CreateInstance] - Requested Instance Layers ({}):", requiredLayers.size());
     for (const auto& layer : requiredLayers) {
-      Log::Debug("[CreateInstance]   - {}", layer);
+      Log::Trace("[CreateInstance]   - {}", layer);
     }
-    Log::Debug("[CreateInstance] - Requested Instance Extensions:");
+    Log::Trace("[CreateInstance] - Requested Instance Extensions:");
     for (const auto& ext : requiredExtensions) {
-      Log::Debug("[CreateInstance]   - {}", ext);
+      Log::Trace("[CreateInstance]   - {}", ext);
     }
   }
 
@@ -479,34 +489,25 @@ VkResult Application::SelectPhysicalDevice() noexcept {
         for (uint32_t i = 0; i < info.MemoryProperties.memoryTypeCount; i++) {
           const VkMemoryType& type{info.MemoryProperties.memoryTypes[i]};
 
-          std::string flags{""};
+          std::vector<std::string> flags;
           if (type.propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) {
-            flags += "Device Local";
+            flags.emplace_back("Device Local");
           }
           if (type.propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
-            if (flags.size() > 0) {
-              flags += ", ";
-            }
-            flags += "Host Visible";
+            flags.emplace_back("Host Visible");
           }
           if (type.propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) {
-            if (flags.size() > 0) {
-              flags += ", ";
-            }
-            flags += "Host Coherent";
+            flags.emplace_back("Host Coherent");
           }
           if (type.propertyFlags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) {
-            if (flags.size() > 0) {
-              flags += ", ";
-            }
-            flags += "Host Cached";
+            flags.emplace_back("Host Cached");
           }
           if (flags.size() == 0) {
-            flags = "No flags";
+            flags.emplace_back("No flags");
           }
 
-          Log::Trace("[SelectPhysicalDevice]       - Type {}: {} on Heap {}", i, flags,
-                     type.heapIndex);
+          Log::Trace("[SelectPhysicalDevice]       - Type {}: {} on Heap {}", i,
+                     fmt::join(flags, ", "), type.heapIndex);
         }
       }
 
@@ -514,49 +515,27 @@ VkResult Application::SelectPhysicalDevice() noexcept {
       {
         Log::Trace("[SelectPhysicalDevice]   - Device Queue Families:");
         for (const auto& family : info.QueueFamilies) {
-          std::string caps{""};
+          std::vector<std::string> caps;
           if (family.Graphics()) {
-            caps += "Graphics";
-            if (family.Index == info.GraphicsIndex) {
-              caps += "*";
-            }
+            caps.push_back(std::string("Graphics") +
+                           (family.Index == info.GraphicsIndex ? "*" : ""));
           }
           if (family.Compute()) {
-            if (caps.size() > 0) {
-              caps += ", ";
-            }
-            caps += "Compute";
-            if (family.Index == info.ComputeIndex) {
-              caps += "*";
-            }
+            caps.push_back(std::string("Compute") + (family.Index == info.ComputeIndex ? "*" : ""));
           }
           if (family.Transfer()) {
-            if (caps.size() > 0) {
-              caps += ", ";
-            }
-            caps += "Transfer";
-            if (family.Index == info.TransferIndex) {
-              caps += "*";
-            }
+            caps.push_back(std::string("Transfer") +
+                           (family.Index == info.TransferIndex ? "*" : ""));
           }
           if (family.SparseBinding()) {
-            if (caps.size() > 0) {
-              caps += ", ";
-            }
-            caps += "Sparse Binding";
+            caps.push_back("Sparse Binding");
           }
           if (family.Present()) {
-            if (caps.size() > 0) {
-              caps += ", ";
-            }
-            caps += "Present";
-            if (family.Index == info.PresentIndex) {
-              caps += "*";
-            }
+            caps.push_back(std::string("Present") + (family.Index == info.PresentIndex ? "*" : ""));
           }
 
           Log::Trace("[SelectPhysicalDevice]     - Family {}: {} Queues <{}>", family.Index,
-                     family.Properties.queueCount, caps);
+                     family.Properties.queueCount, fmt::join(caps, ", "));
         }
       }
 
@@ -598,22 +577,103 @@ VkResult Application::SelectPhysicalDevice() noexcept {
   return VK_SUCCESS;
 }
 
-void Application::EnumeratePhysicalDevice(VkPhysicalDevice device,
-                                          PhysicalDeviceInfo& info) noexcept {}
+VkResult Application::CreateDevice() noexcept {
+  std::set<uint32_t> queueIndices{mDeviceInfo.GraphicsIndex.value(),
+                                  mDeviceInfo.PresentIndex.value(),
+                                  mDeviceInfo.TransferIndex.value()};
+  if (mDeviceInfo.ComputeIndex.has_value()) {
+    queueIndices.insert(mDeviceInfo.ComputeIndex.value());
+  }
 
-void Application::SetObjectName(const VkObjectType type, const uint64_t handle,
-                                const char* name) noexcept {
-  static PFN_vkSetDebugUtilsObjectNameEXT func{reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(
-      vkGetInstanceProcAddr(mInstance, "vkSetDebugUtilsObjectNameEXT"))};
-  if (func && mValidation) {
-    const VkDebugUtilsObjectNameInfoEXT nameInfo{
-        VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,  // sType
-        nullptr,                                             // pNext
-        type,                                                // objectType
-        handle,                                              // objectHandle
-        name                                                 // pObjectName
+  std::vector<VkDeviceQueueCreateInfo> queueCIs(queueIndices.size());
+  uint32_t i{0};
+  for (const uint32_t idx : queueIndices) {
+    constexpr const float priority{0.0f};
+    queueCIs[i++] = {
+        VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,  // sType
+        nullptr,                                     // pNext
+        0,                                           // flags
+        idx,                                         // queueFamilyIndex
+        1,                                           // queueCount
+        &priority                                    // pQueuePriorities
     };
-    func(mDevice, &nameInfo);
+  }
+
+  std::vector<const char*> deviceExtensions{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+
+  VkPhysicalDeviceFeatures requiredFeatures{};
+
+  const VkDeviceCreateInfo deviceCI{
+      VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,            // sType
+      nullptr,                                         // pNext
+      0,                                               // flags
+      static_cast<uint32_t>(queueCIs.size()),          // queueCreateInfoCount
+      queueCIs.data(),                                 // pQueueCreateInfos
+      0,                                               // enabledLayerCount
+      nullptr,                                         // ppEnabledLayerNames
+      static_cast<uint32_t>(deviceExtensions.size()),  // enabledExtensionCount
+      deviceExtensions.data(),                         // ppEnabledExtensionNames
+      &requiredFeatures                                // pEnabledFeatures
+  };
+
+  // Dump Instance Information
+  {
+    Log::Trace("[CreateDevice] --- Raven VkDevice Info --- ");
+    Log::Trace("[CreateDevice] - Queues to Create: {}", queueIndices.size());
+    Log::Trace("[CreateDevice] - Requested Device Extensions:");
+    for (const auto& ext : deviceExtensions) {
+      Log::Trace("[CreateDevice]   - {}", ext);
+    }
+  }
+
+  return vkCreateDevice(mPhysicalDevice, &deviceCI, nullptr, &mDevice);
+}
+
+void Application::GetQueues() noexcept {
+  std::set<uint32_t> queueIndices{mDeviceInfo.GraphicsIndex.value(),
+                                  mDeviceInfo.PresentIndex.value(),
+                                  mDeviceInfo.TransferIndex.value()};
+
+  vkGetDeviceQueue(mDevice, mDeviceInfo.GraphicsIndex.value(), 0, &mGraphicsQueue);
+  vkGetDeviceQueue(mDevice, mDeviceInfo.PresentIndex.value(), 0, &mPresentQueue);
+  vkGetDeviceQueue(mDevice, mDeviceInfo.TransferIndex.value(), 0, &mTransferQueue);
+  if (mDeviceInfo.ComputeIndex.has_value()) {
+    vkGetDeviceQueue(mDevice, mDeviceInfo.ComputeIndex.value(), 0, &mComputeQueue);
+    queueIndices.insert(mDeviceInfo.ComputeIndex.value());
+  }
+
+  if (mValidation) {
+    for (const uint32_t idx : queueIndices) {
+      std::vector<std::string> roles;
+      idx == mDeviceInfo.GraphicsIndex ? roles.push_back("Graphics") : 0;
+      idx == mDeviceInfo.PresentIndex ? roles.push_back("Present") : 0;
+      idx == mDeviceInfo.TransferIndex ? roles.push_back("Transfer") : 0;
+      idx == mDeviceInfo.ComputeIndex ? roles.push_back("Compute") : 0;
+
+      if (idx == mDeviceInfo.GraphicsIndex) {
+        SetObjectName(VK_OBJECT_TYPE_QUEUE, mGraphicsQueue,
+                      fmt::format("{} Queue", fmt::join(roles, "/")).c_str());
+        continue;
+      }
+      if (idx == mDeviceInfo.PresentIndex) {
+        SetObjectName(VK_OBJECT_TYPE_QUEUE, mPresentQueue,
+                      fmt::format("{} Queue", fmt::join(roles, "/")).c_str());
+        continue;
+      }
+      if (idx == mDeviceInfo.TransferIndex) {
+        SetObjectName(VK_OBJECT_TYPE_QUEUE, mTransferQueue,
+                      fmt::format("{} Queue", fmt::join(roles, "/")).c_str());
+        continue;
+      }
+      if (idx == mDeviceInfo.ComputeIndex) {
+        SetObjectName(VK_OBJECT_TYPE_QUEUE, mComputeQueue,
+                      fmt::format("{} Queue", fmt::join(roles, "/")).c_str());
+        continue;
+      }
+    }
   }
 }
+
+void Application::EnumeratePhysicalDevice(VkPhysicalDevice device,
+                                          PhysicalDeviceInfo& info) noexcept {}
 }  // namespace Raven

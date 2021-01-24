@@ -6,7 +6,7 @@ using namespace Raven;
 
 int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
   Log::Initialize();
-  Log::SetLevel(Raven::Log::Level::Trace);
+  Log::SetLevel(Raven::Log::Level::Debug);
 
   try {
     const std::vector<const char*> cmdArgs(__argv, __argv + __argc);

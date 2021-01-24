@@ -60,3 +60,4 @@ const std::unordered_map<VkObjectType, const char*> gVkObjectTypes{
     X(VK_OBJECT_TYPE_DEFERRED_OPERATION_KHR),
     X(VK_OBJECT_TYPE_INDIRECT_COMMANDS_LAYOUT_NV),
     X(VK_OBJECT_TYPE_PRIVATE_DATA_SLOT_EXT)};
+#undef X
