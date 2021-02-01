@@ -127,6 +127,20 @@ Application::~Application() {
   ShutdownSDL();
 }
 
+void Application::Run() {
+  mRunning = true;
+
+  SDL_Event event;
+  while (mRunning) {
+    while (SDL_PollEvent(&event)) {
+      if (event.type == SDL_QUIT) {
+        mRunning = false;
+        break;
+      }
+    }
+  }
+}
+
 void Application::InitializeSDL() {
   SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
   mWindow = SDL_CreateWindow("Raven", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1600, 900,
@@ -140,7 +154,6 @@ void Application::ShutdownSDL() {
 
 void Application::InitializeVulkan() {
   VkCall(CreateInstance(mValidation));
-  // SetObjectName(VK_OBJECT_TYPE_INSTANCE, reinterpret_cast<uint64_t>(mInstance), "Main Instance");
   Log::Debug("[InitializeVulkan] Vulkan Instance created.");
 
   if (mValidation) {
@@ -161,10 +174,16 @@ void Application::InitializeVulkan() {
 
   GetQueues();
   Log::Debug("[InitializeVulkan] Device queues retrieved.");
+
+  VkCall(CreateSwapchain());
+  Log::Debug("[InitializeVulkan] Vulkan Swapchain created. <{}>",
+             reinterpret_cast<void*>(mSwapchain.Swapchain));
 }
 
 void Application::ShutdownVulkan() {
   vkDeviceWaitIdle(mDevice);
+
+  DestroySwapchain();
 
   vkDestroyDevice(mDevice, nullptr);
   vkDestroySurfaceKHR(mInstance, mSurface, nullptr);
@@ -377,6 +396,7 @@ VkResult Application::SelectPhysicalDevice() noexcept {
       vkGetPhysicalDeviceFeatures(device, &info.Features);
       vkGetPhysicalDeviceMemoryProperties(device, &info.MemoryProperties);
       vkGetPhysicalDeviceProperties(device, &info.Properties);
+      vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, mSurface, &info.SurfaceCapabilities);
 
       // Extensions
       uint32_t extensionCount{0};
@@ -444,6 +464,45 @@ VkResult Application::SelectPhysicalDevice() noexcept {
               info.ComputeIndex = family.Index;
               break;
             }
+          }
+        }
+      }
+
+      // Determine Swapchain info
+      {
+        uint32_t formatCount{0};
+        vkGetPhysicalDeviceSurfaceFormatsKHR(device, mSurface, &formatCount, nullptr);
+        std::vector<VkSurfaceFormatKHR> formats(formatCount);
+        vkGetPhysicalDeviceSurfaceFormatsKHR(device, mSurface, &formatCount, formats.data());
+
+        if (formatCount == 1 && formats[0].format == VK_FORMAT_UNDEFINED) {
+          info.OptimalSwapchainFormat.format = VK_FORMAT_B8G8R8A8_UNORM;
+          info.OptimalSwapchainFormat.colorSpace = formats[0].colorSpace;
+        } else {
+          for (const auto& fmt : formats) {
+            if (fmt.format == VK_FORMAT_B8G8R8A8_UNORM) {
+              info.OptimalSwapchainFormat = fmt;
+              break;
+            }
+          }
+        }
+
+        if (info.OptimalSwapchainFormat.format == VK_FORMAT_UNDEFINED) {
+          info.OptimalSwapchainFormat = formats[0];
+        }
+
+        uint32_t presentModeCount{0};
+        vkGetPhysicalDeviceSurfacePresentModesKHR(device, mSurface, &presentModeCount, nullptr);
+        std::vector<VkPresentModeKHR> presentModes(presentModeCount);
+        vkGetPhysicalDeviceSurfacePresentModesKHR(device, mSurface, &presentModeCount,
+                                                  presentModes.data());
+
+        for (const auto& pm : presentModes) {
+          if (pm == VK_PRESENT_MODE_MAILBOX_KHR) {
+            info.OptimalPresentMode = pm;
+            break;
+          } else if (pm == VK_PRESENT_MODE_IMMEDIATE_KHR) {
+            info.OptimalPresentMode = pm;
           }
         }
       }
@@ -674,6 +733,58 @@ void Application::GetQueues() noexcept {
   }
 }
 
-void Application::EnumeratePhysicalDevice(VkPhysicalDevice device,
-                                          PhysicalDeviceInfo& info) noexcept {}
+VkResult Application::CreateSwapchain() noexcept {
+  mSwapchain.ImageCount = std::min(mDeviceInfo.SurfaceCapabilities.minImageCount + 1,
+                                   mDeviceInfo.SurfaceCapabilities.maxImageCount);
+  mSwapchain.Extent = {1600, 900};
+  VkSharingMode sharing{VK_SHARING_MODE_EXCLUSIVE};
+  std::vector<uint32_t> queues{mDeviceInfo.GraphicsIndex.value()};
+  if (mDeviceInfo.GraphicsIndex != mDeviceInfo.PresentIndex) {
+    sharing = VK_SHARING_MODE_CONCURRENT;
+    queues.push_back(mDeviceInfo.PresentIndex.value());
+  }
+  VkSurfaceTransformFlagBitsKHR preTransform;
+  if (mDeviceInfo.SurfaceCapabilities.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) {
+    preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+  } else {
+    preTransform = mDeviceInfo.SurfaceCapabilities.currentTransform;
+  }
+  VkCompositeAlphaFlagBitsKHR compositeAlpha{VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR};
+  constexpr const VkCompositeAlphaFlagBitsKHR compositeAlphas[]{
+      VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR, VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
+      VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR, VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR};
+  for (const auto& ca : compositeAlphas) {
+    if (mDeviceInfo.SurfaceCapabilities.supportedCompositeAlpha & ca) {
+      compositeAlpha = ca;
+      break;
+    }
+  }
+
+  const VkSwapchainCreateInfoKHR swapchainCI{
+      VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,    // sType
+      nullptr,                                        // pNext
+      0,                                              // flags
+      mSurface,                                       // surface
+      mSwapchain.ImageCount,                          // minImageCount
+      mDeviceInfo.OptimalSwapchainFormat.format,      // imageFormat
+      mDeviceInfo.OptimalSwapchainFormat.colorSpace,  // imageColorSpace
+      mSwapchain.Extent,                              // imageExtent
+      1,                                              // imageArrayLayers
+      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,            // imageUsage
+      sharing,                                        // imageSharingMode
+      static_cast<uint32_t>(queues.size()),           // queueFamilyIndexCount
+      queues.data(),                                  // pQueueFamilyIndices
+      preTransform,                                   // preTransform
+      compositeAlpha,                                 // compositeAlpha
+      mDeviceInfo.OptimalPresentMode,                 // presentMode
+      VK_TRUE,                                        // clipped
+      mSwapchain.Swapchain                            // oldSwapchain
+  };
+
+  return vkCreateSwapchainKHR(mDevice, &swapchainCI, nullptr, &mSwapchain.Swapchain);
+}
+
+void Application::DestroySwapchain() noexcept {
+  vkDestroySwapchainKHR(mDevice, mSwapchain.Swapchain, nullptr);
+}
 }  // namespace Raven

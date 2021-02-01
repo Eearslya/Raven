@@ -8,6 +8,12 @@
 #include "VulkanCore.h"
 
 namespace Raven {
+struct VulkanSwapchain final {
+  VkSwapchainKHR Swapchain{VK_NULL_HANDLE};
+  uint32_t ImageCount{0};
+  VkExtent2D Extent{0, 0};
+};
+
 struct QueueFamilyInfo final {
   uint32_t Index{};
   VkQueueFamilyProperties Properties{};
@@ -28,6 +34,9 @@ struct PhysicalDeviceInfo final {
   VkPhysicalDeviceProperties Properties{};
   std::vector<QueueFamilyInfo> QueueFamilies;
   std::vector<VkExtensionProperties> Extensions;
+  VkSurfaceCapabilitiesKHR SurfaceCapabilities{};
+  VkSurfaceFormatKHR OptimalSwapchainFormat{};
+  VkPresentModeKHR OptimalPresentMode{VK_PRESENT_MODE_FIFO_KHR};
 
   std::optional<uint32_t> GraphicsIndex;
   std::optional<uint32_t> ComputeIndex;
@@ -40,6 +49,8 @@ class Application final {
   Application(const std::vector<const char*>& cmdArgs);
   ~Application();
 
+  void Run();
+
  private:
   void InitializeSDL();
   void ShutdownSDL();
@@ -51,7 +62,9 @@ class Application final {
   VkResult SelectPhysicalDevice() noexcept;
   VkResult CreateDevice() noexcept;
   void GetQueues() noexcept;
-  void EnumeratePhysicalDevice(VkPhysicalDevice device, PhysicalDeviceInfo& info) noexcept;
+  VkResult CreateSwapchain() noexcept;
+
+  void DestroySwapchain() noexcept;
 
   template <typename Type>
   void SetObjectName(const VkObjectType type, const Type handle, const char* name) noexcept {
@@ -71,6 +84,7 @@ class Application final {
     }
   }
 
+  bool mRunning{false};
   bool mValidation{true};
   SDL_Window* mWindow;
   VkInstance mInstance{VK_NULL_HANDLE};
@@ -83,5 +97,6 @@ class Application final {
   VkQueue mPresentQueue{VK_NULL_HANDLE};
   VkQueue mTransferQueue{VK_NULL_HANDLE};
   VkQueue mComputeQueue{VK_NULL_HANDLE};
+  VulkanSwapchain mSwapchain{};
 };
 }  // namespace Raven

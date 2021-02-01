@@ -12,6 +12,7 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     const std::vector<const char*> cmdArgs(__argv, __argv + __argc);
 
     Application app(cmdArgs);
+    app.Run();
   } catch (const std::exception& e) {
     const std::string alert{
         fmt::format("An application exception has occurred.\n{}\n\n{}", typeid(e).name(), e.what())};
