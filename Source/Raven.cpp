@@ -1,6 +1,7 @@
 #include "Core.h"
 
 #include "Application.h"
+#include "Win32.h"
 
 using namespace Raven;
 
@@ -14,8 +15,8 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     Application app(cmdArgs);
     app.Run();
   } catch (const std::exception& e) {
-    const std::string alert{
-        fmt::format("An application exception has occurred.\n{}\n\n{}", typeid(e).name(), e.what())};
+    const std::string alert{fmt::format("An application exception has occurred.\n{}\n\n{}",
+                                        typeid(e).name(), e.what())};
     Log::Fatal(alert);
     ::MessageBoxA(NULL, alert.c_str(), "Raven Exception", MB_OK | MB_ICONERROR);
   } catch (...) {

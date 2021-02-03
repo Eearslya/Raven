@@ -5,7 +5,10 @@ set(ROOT_FILES
 	Log.cpp
 	Log.h
     Raven.cpp
-	VulkanCore.h)
+	VulkanCore.h
+	Win32.h
+	Window.cpp
+	Window.h)
     
 set(RAVEN_FILES
     ${ROOT_FILES})
@@ -32,12 +35,8 @@ source_group("Precompiled Headers" FILES ${PCH_FILES})
 set_property(TARGET Raven PROPERTY CXX_STANDARD 17)
 set_property(TARGET Raven PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:Raven>")
 target_include_directories(Raven PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(Raven Vulkan::Vulkan glm imgui stb sdl2 fmt)
+target_link_libraries(Raven Vulkan::Vulkan glm imgui stb fmt)
 add_dependencies(Raven Assets Shaders)
-
-add_custom_command(TARGET Raven POST_BUILD
-	WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-	COMMAND ${CMAKE_COMMAND} -E copy ${sdl2_DIR}/lib/x64/SDL2.dll ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>)
 
 if (MSVC)
 	target_link_options(Raven PRIVATE

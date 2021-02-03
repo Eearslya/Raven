@@ -15,12 +15,6 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(imgui)
 set_property(TARGET imgui PROPERTY FOLDER "Dependencies")
 
-set(sdl2_DIR "SDL_PATH" CACHE FILEPATH "Path to SDL2")
-add_library(sdl2 INTERFACE)
-target_include_directories(sdl2 INTERFACE "${sdl2_DIR}/include" "${sdl2_image_DIR}/include" )
-target_link_directories(sdl2 INTERFACE "${sdl2_DIR}/lib/x64" "${sdl2_image_DIR}/lib/x64")
-target_link_libraries(sdl2 INTERFACE SDL2 SDL2main)
-
 FetchContent_Declare(
 	fmt
 	GIT_REPOSITORY git@github.com:fmtlib/fmt.git

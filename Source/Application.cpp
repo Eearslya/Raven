@@ -1,10 +1,10 @@
 #include "Application.h"
 #include "Core.h"
 
-#include <SDL_vulkan.h>
 #include <vulkan/vulkan_win32.h>
 
 #include "VulkanCore.h"
+#include "Window.h"
 
 namespace Raven {
 VkBool32 VulkanDebugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -117,39 +117,21 @@ Application::Application(const std::vector<const char*>& cmdArgs) {
   // TODO: Command line arguments?
   Log::Info("Raven is starting...");
   mValidation = true;
-  InitializeSDL();
+  mWindow = std::make_shared<Window>();
   InitializeVulkan();
 }
 
 Application::~Application() {
   Log::Info("Raven is shutting down...");
   ShutdownVulkan();
-  ShutdownSDL();
 }
 
 void Application::Run() {
   mRunning = true;
 
-  SDL_Event event;
   while (mRunning) {
-    while (SDL_PollEvent(&event)) {
-      if (event.type == SDL_QUIT) {
-        mRunning = false;
-        break;
-      }
-    }
+    mWindow->Update();
   }
-}
-
-void Application::InitializeSDL() {
-  SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
-  mWindow = SDL_CreateWindow("Raven", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1600, 900,
-                             SDL_WINDOW_VULKAN | SDL_WINDOW_SHOWN);
-}
-
-void Application::ShutdownSDL() {
-  SDL_DestroyWindow(mWindow);
-  SDL_Quit();
 }
 
 void Application::InitializeVulkan() {
@@ -176,8 +158,8 @@ void Application::InitializeVulkan() {
   Log::Debug("[InitializeVulkan] Device queues retrieved.");
 
   VkCall(CreateSwapchain());
-  Log::Debug("[InitializeVulkan] Vulkan Swapchain created. <{}>",
-             reinterpret_cast<void*>(mSwapchain.Swapchain));
+  Log::Debug("[InitializeVulkan] Vulkan Swapchain created with {} images. <{}>",
+             mSwapchain.ImageCount, reinterpret_cast<void*>(mSwapchain.Swapchain));
 }
 
 void Application::ShutdownVulkan() {
@@ -361,11 +343,7 @@ VkResult Application::CreateDebugger() noexcept {
 }
 
 VkResult Application::CreateSurface() noexcept {
-  const SDL_bool created{SDL_Vulkan_CreateSurface(mWindow, mInstance, &mSurface)};
-  if (!created) {
-    Log::Fatal("[CreateSurface] Failed to create a surface with SDL!");
-    return VK_ERROR_SURFACE_LOST_KHR;
-  }
+  mSurface = mWindow->CreateSurface(mInstance);
 
   return VK_SUCCESS;
 }
@@ -532,6 +510,12 @@ VkResult Application::SelectPhysicalDevice() noexcept {
             Log::Trace("[SelectPhysicalDevice]   - Type: CPU");
             break;
         }
+      }
+
+      // Swapchain Properties
+      {
+        Log::Trace("[SelectPhysicalDevice]   - Optimal Image Format: {}",
+                   gVkFormats.find(info.OptimalSwapchainFormat.format)->second);
       }
 
       // Memory Properties
@@ -781,10 +765,57 @@ VkResult Application::CreateSwapchain() noexcept {
       mSwapchain.Swapchain                            // oldSwapchain
   };
 
-  return vkCreateSwapchainKHR(mDevice, &swapchainCI, nullptr, &mSwapchain.Swapchain);
+  const VkResult swapchainRes{
+      vkCreateSwapchainKHR(mDevice, &swapchainCI, nullptr, &mSwapchain.Swapchain)};
+  if (swapchainRes != VK_SUCCESS) {
+    return swapchainRes;
+  }
+
+  SetObjectName(VK_OBJECT_TYPE_SWAPCHAIN_KHR, mSwapchain.Swapchain, "Main Swapchain");
+
+  vkGetSwapchainImagesKHR(mDevice, mSwapchain.Swapchain, &mSwapchain.ImageCount, nullptr);
+  mSwapchain.Images.resize(mSwapchain.ImageCount);
+  mSwapchain.ImageViews.resize(mSwapchain.ImageCount);
+  vkGetSwapchainImagesKHR(mDevice, mSwapchain.Swapchain, &mSwapchain.ImageCount,
+                          mSwapchain.Images.data());
+
+  for (uint32_t i = 0; i < mSwapchain.ImageCount; i++) {
+    SetObjectName(VK_OBJECT_TYPE_IMAGE, mSwapchain.Images[i],
+                  fmt::format("Swapchain Image {}", i).c_str());
+
+    const VkImageViewCreateInfo imageViewCI{
+        VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,  // sType
+        nullptr,                                   // pNext
+        0,                                         // flags
+        mSwapchain.Images[i],                      // image
+        VK_IMAGE_VIEW_TYPE_2D,                     // viewType
+        swapchainCI.imageFormat,                   // format
+        {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
+         VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY},  // components
+        {
+            VK_IMAGE_ASPECT_COLOR_BIT,  // aspectMask
+            0,                          // baseMipLevel
+            1,                          // levelCount
+            0,                          // baseArrayLayer
+            1                           // layerCount
+        }                               // subresourceRange
+    };
+    const VkResult imageViewRes{
+        vkCreateImageView(mDevice, &imageViewCI, nullptr, &mSwapchain.ImageViews[i])};
+    if (imageViewRes != VK_SUCCESS) {
+      return imageViewRes;
+    }
+    SetObjectName(VK_OBJECT_TYPE_IMAGE_VIEW, mSwapchain.ImageViews[i],
+                  fmt::format("Swapchain Image View {}", i).c_str());
+  }
+
+  return VK_SUCCESS;
 }
 
 void Application::DestroySwapchain() noexcept {
+  for (auto& iv : mSwapchain.ImageViews) {
+    vkDestroyImageView(mDevice, iv, nullptr);
+  }
   vkDestroySwapchainKHR(mDevice, mSwapchain.Swapchain, nullptr);
 }
 }  // namespace Raven

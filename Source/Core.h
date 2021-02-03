@@ -2,7 +2,6 @@
 
 #define NOMINMAX
 
-#include <Windows.h>
 #include <array>
 #include <exception>
 #include <fmt/color.h>
@@ -17,3 +16,4 @@
 #include <vector>
 
 #include "Log.h"
+#include "Win32.h"

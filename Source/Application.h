@@ -1,6 +1,6 @@
 #pragma once
 
-#include <SDL.h>
+#include <memory>
 #include <optional>
 #include <vector>
 #include <vulkan/vulkan.h>
@@ -8,10 +8,14 @@
 #include "VulkanCore.h"
 
 namespace Raven {
+class Window;
+
 struct VulkanSwapchain final {
   VkSwapchainKHR Swapchain{VK_NULL_HANDLE};
   uint32_t ImageCount{0};
   VkExtent2D Extent{0, 0};
+  std::vector<VkImage> Images;
+  std::vector<VkImageView> ImageViews;
 };
 
 struct QueueFamilyInfo final {
@@ -86,7 +90,7 @@ class Application final {
 
   bool mRunning{false};
   bool mValidation{true};
-  SDL_Window* mWindow;
+  std::shared_ptr<Window> mWindow;
   VkInstance mInstance{VK_NULL_HANDLE};
   VkDebugUtilsMessengerEXT mDebugger{VK_NULL_HANDLE};
   VkSurfaceKHR mSurface{VK_NULL_HANDLE};

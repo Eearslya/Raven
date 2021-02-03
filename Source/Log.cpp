@@ -4,6 +4,7 @@
 #include <fmt/color.h>
 
 #include "Log.h"
+#include "Win32.h"
 
 namespace Raven {
 Log::Level Log::sLogLevel{Level::Info};
@@ -46,8 +47,9 @@ void Log::SetLevel(const Level level) noexcept { sLogLevel = level; }
 
 void Log::Output(const Level level, const std::string& msg) noexcept {
   const std::chrono::time_point now{std::chrono::system_clock::now()};
-  fmt::print(gLevelColors[static_cast<size_t>(level)], "<{:%H:%M:%S}> [{}] {}", now,
-             gLevelTags[static_cast<size_t>(level)], msg);
-  fmt::print(fmt::text_style::text_style(), "\n");
+  const std::string finalMsg{
+      fmt::format("<{:%H:%M:%S}> [{}] {}\n", now, gLevelTags[static_cast<size_t>(level)], msg)};
+  fmt::print(gLevelColors[static_cast<size_t>(level)], finalMsg);
+  ::OutputDebugStringA(finalMsg.c_str());
 }
 }  // namespace Raven
