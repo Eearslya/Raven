@@ -1,9 +1,12 @@
 #pragma once
 
+#define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
+#define VK_USE_PLATFORM_WIN32_KHR
+
 #include <exception>
 #include <fmt/core.h>
 #include <unordered_map>
-#include <vulkan/vulkan.h>
+#include <vulkan/vulkan.hpp>
 
 #define VkCall(x)                                                                                \
   do {                                                                                           \

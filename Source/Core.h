@@ -8,6 +8,7 @@
 #include <fmt/core.h>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>

@@ -9,9 +9,18 @@ set(ROOT_FILES
 	Win32.h
 	Window.cpp
 	Window.h)
+
+set(VULKAN_FILES
+	Vulkan/Instance.cpp
+	Vulkan/Instance.h
+	Vulkan/PhysicalDevice.cpp
+	Vulkan/PhysicalDevice.h
+	Vulkan/Surface.cpp
+	Vulkan/Surface.h)
     
 set(RAVEN_FILES
-    ${ROOT_FILES})
+    ${ROOT_FILES}
+	${VULKAN_FILES})
 
 # For convenience, ensure any newly added source files
 # get created if they don't already exist. Note that this
@@ -20,6 +29,7 @@ file(TOUCH ${RAVEN_FILES})
 
 add_executable(Raven ${RAVEN_FILES})
 
+source_group("Vulkan" FILES ${VULKAN_FILES})
 source_group("" FILES ${ROOT_FILES})
 
 target_precompile_headers(Raven PRIVATE Core.h)

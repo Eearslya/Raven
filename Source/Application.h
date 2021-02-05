@@ -3,12 +3,93 @@
 #include <memory>
 #include <optional>
 #include <vector>
-#include <vulkan/vulkan.h>
 
 #include "VulkanCore.h"
 
 namespace Raven {
 class Window;
+
+class InstanceBuilder final {
+ public:
+  InstanceBuilder& SetAppName(const std::string& name) noexcept { mAppName = name; }
+
+  InstanceBuilder& SetAppVersion(uint32_t major, uint32_t minor, uint32_t patch = 0) noexcept {
+    mAppVersion = VK_MAKE_VERSION(major, minor, patch);
+  }
+
+  InstanceBuilder& RequestValidation(bool validation = true) noexcept {
+    mRequestValidation = validation;
+  }
+
+  InstanceBuilder& SetApiVersion(uint32_t major, uint32_t minor) noexcept {
+    mRequiredVersion = VK_MAKE_VERSION(major, minor, 0);
+  }
+
+  operator vk::InstanceCreateInfo() {
+    mAppInfo = vk::ApplicationInfo(mAppName.c_str(), mAppVersion, "Raven", VK_MAKE_VERSION(1, 0, 0),
+                                   mRequiredVersion);
+
+    const auto availableLayers{vk::enumerateInstanceLayerProperties()};
+    const auto availableExtensions{vk::enumerateInstanceExtensionProperties()};
+
+    std::vector<const char*> enabledLayers;
+    std::vector<const char*> enabledExtensions{VK_KHR_SURFACE_EXTENSION_NAME,
+                                               VK_KHR_WIN32_SURFACE_EXTENSION_NAME};
+
+    bool validation{false};
+    if (mRequestValidation) {
+      const std::vector<const char*> validationLayers{"VK_LAYER_KHRONOS_validation"};
+      const std::vector<const char*> validationExtensions{VK_EXT_DEBUG_UTILS_EXTENSION_NAME};
+      bool fail{false};
+
+      for (const auto& layerName : validationLayers) {
+        bool found{false};
+        for (const auto& layer : availableLayers) {
+          if (strcmp(layerName, layer.layerName) == 0) {
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          fail = true;
+          Log::Warn("Missing required layer for validation: {}", layerName);
+        }
+      }
+
+      for (const auto& extName : validationExtensions) {
+        bool found{false};
+        for (const auto& ext : availableExtensions) {
+          if (strcmp(extName, ext.extensionName) == 0) {
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          fail = true;
+          Log::Warn("Missing required extension for validation: {}", extName);
+        }
+      }
+
+      if (fail) {
+        Log::Warn("Validation layers could not be enabled.");
+      } else {
+        enabledLayers.insert(enabledLayers.end(), validationLayers.begin(), validationLayers.end());
+        enabledExtensions.insert(enabledExtensions.end(), validationExtensions.begin(),
+                                 validationExtensions.end());
+        validation = true;
+      }
+    }
+
+    return vk::InstanceCreateInfo({}, &mAppInfo, enabledLayers, enabledExtensions);
+  }
+
+ private:
+  vk::ApplicationInfo mAppInfo;
+  std::string mAppName{"Raven"};
+  uint32_t mAppVersion{VK_MAKE_VERSION(1, 0, 0)};
+  bool mRequestValidation{false};
+  uint32_t mRequiredVersion{VK_API_VERSION_1_0};
+};
 
 struct VulkanSwapchain final {
   VkSwapchainKHR Swapchain{VK_NULL_HANDLE};
@@ -56,13 +137,9 @@ class Application final {
   void Run();
 
  private:
-  void InitializeSDL();
-  void ShutdownSDL();
   void InitializeVulkan();
   void ShutdownVulkan();
   VkResult CreateInstance(const bool validation) noexcept;
-  VkResult CreateDebugger() noexcept;
-  VkResult CreateSurface() noexcept;
   VkResult SelectPhysicalDevice() noexcept;
   VkResult CreateDevice() noexcept;
   void GetQueues() noexcept;
@@ -73,7 +150,7 @@ class Application final {
   template <typename Type>
   void SetObjectName(const VkObjectType type, const Type handle, const char* name) noexcept {
     static PFN_vkSetDebugUtilsObjectNameEXT func{reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(
-        vkGetInstanceProcAddr(mInstance, "vkSetDebugUtilsObjectNameEXT"))};
+        vkGetInstanceProcAddr(*mInstance, "vkSetDebugUtilsObjectNameEXT"))};
     if (func && mValidation) {
       const VkDebugUtilsObjectNameInfoEXT nameInfo{
           VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,  // sType
@@ -91,10 +168,10 @@ class Application final {
   bool mRunning{false};
   bool mValidation{true};
   std::shared_ptr<Window> mWindow;
-  VkInstance mInstance{VK_NULL_HANDLE};
-  VkDebugUtilsMessengerEXT mDebugger{VK_NULL_HANDLE};
-  VkSurfaceKHR mSurface{VK_NULL_HANDLE};
-  VkPhysicalDevice mPhysicalDevice{VK_NULL_HANDLE};
+  vk::UniqueInstance mInstance;
+  vk::UniqueSurfaceKHR mSurface;
+  std::shared_ptr<Vulkan::PhysicalDevice> mPhysicalDevice;
+  VkPhysicalDevice mPhysDev{VK_NULL_HANDLE};
   PhysicalDeviceInfo mDeviceInfo{};
   VkDevice mDevice{VK_NULL_HANDLE};
   VkQueue mGraphicsQueue{VK_NULL_HANDLE};

@@ -1,8 +1,13 @@
 #pragma once
 
-#include <vulkan/vulkan.h>
+#include <memory>
 
 namespace Raven {
+namespace Vulkan {
+class Instance;
+class Surface;
+}  // namespace Vulkan
+
 class Window final {
  public:
   Window();
@@ -10,7 +15,7 @@ class Window final {
   ~Window();
 
   void Update() noexcept;
-  VkSurfaceKHR CreateSurface(VkInstance instance) const;
+  vk::UniqueSurfaceKHR CreateSurface(const vk::Instance& instance) const;
 
  private:
   HWND mHandle;

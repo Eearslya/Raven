@@ -1,118 +1,10 @@
 #include "Application.h"
 #include "Core.h"
 
-#include <vulkan/vulkan_win32.h>
-
 #include "VulkanCore.h"
 #include "Window.h"
 
 namespace Raven {
-VkBool32 VulkanDebugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
-                             VkDebugUtilsMessageTypeFlagsEXT messageTypes,
-                             const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
-                             void* pUserData) {
-  std::string msgType{""};
-  if (messageTypes & VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT) {
-    msgType += "GEN";
-  }
-  if (messageTypes & VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT) {
-    if (msgType.size() > 0) {
-      msgType += "|";
-    }
-    msgType += "PRF";
-  }
-  if (messageTypes & VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT) {
-    if (msgType.size() > 0) {
-      msgType += "|";
-    }
-    msgType += "VLD";
-  }
-
-  const char* msg{pCallbackData->pMessage};
-  std::string customMsg{""};
-  // Attempt to perform additional parsing to clean up validation messages.
-  if (messageTypes == VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT) {
-    std::string layerMsg{msg};
-    const size_t firstPipe{layerMsg.find("|", 0)};
-    if (firstPipe != std::string::npos) {
-      const size_t secondPipe{layerMsg.find("|", firstPipe + 1)};
-      if (secondPipe != std::string::npos) {
-        std::string severity{""};
-        switch (messageSeverity) {
-          case VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT:
-            severity = "Error";
-            break;
-          case VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT:
-            severity = "Warning";
-            break;
-          case VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT:
-            severity = "Info";
-            break;
-          case VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT:
-            severity = "Verbose";
-            break;
-        }
-        customMsg = fmt::format("Validation {}: {}\n - {}", severity, pCallbackData->pMessageIdName,
-                                layerMsg.substr(secondPipe + 2));
-
-        if (pCallbackData->objectCount > 0) {
-          customMsg += "\n - Related Objects:";
-          for (uint32_t i = 0; i < pCallbackData->objectCount; i++) {
-            const VkDebugUtilsObjectNameInfoEXT& objData{pCallbackData->pObjects[i]};
-
-            const auto objTypeIt{gVkObjectTypes.find(objData.objectType)};
-            const char* objType{objTypeIt == gVkObjectTypes.end() ? "Unknown" : objTypeIt->second};
-            const void* objHandle{reinterpret_cast<void*>(objData.objectHandle)};
-            const char* objName{objData.pObjectName};
-
-            customMsg += fmt::format("\n   - Object {}: {} <{}>", i, objType, objHandle);
-            if (objName) {
-              customMsg += fmt::format(" \"{}\"", objName);
-            }
-          }
-        }
-
-        msg = customMsg.c_str();
-      }
-    }
-  }
-
-  switch (messageSeverity) {
-    case VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT:
-      Log::Error("[Vulkan-ERR-{}] {}", msgType, msg);
-      break;
-    case VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT:
-      Log::Warn("[Vulkan-WRN-{}] {}", msgType, msg);
-      break;
-    case VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT:
-      if (messageTypes & VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT) {
-        Log::Debug("[Vulkan-INF-{}] {}", msgType, msg);
-      } else {
-        Log::Trace("[Vulkan-INF-{}] {}", msgType, msg);
-      }
-      break;
-    case VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT:
-      Log::Trace("[Vulkan-VRB-{}] {}", msgType, msg);
-      break;
-  }
-
-  return VK_FALSE;
-}
-
-constexpr const VkDebugUtilsMessengerCreateInfoEXT gDebugMessengerCI{
-    VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,  // sType
-    nullptr,                                                  // pNext
-    0,                                                        // flags
-    VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT |
-        VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
-        VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT |
-        VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT,  // messageSeverity
-    VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT |
-        VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT,  // messageType
-    VulkanDebugCallback,                                 // pfnUserCallback
-    nullptr                                              // pUserData
-};
-
 Application::Application(const std::vector<const char*>& cmdArgs) {
   // TODO: Command line arguments?
   Log::Info("Raven is starting...");
@@ -135,17 +27,20 @@ void Application::Run() {
 }
 
 void Application::InitializeVulkan() {
-  VkCall(CreateInstance(mValidation));
+  vk::DynamicLoader dl;
+  PFN_vkGetInstanceProcAddr loader{
+      dl.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr")};
+  VULKAN_HPP_DEFAULT_DISPATCHER.init(loader);
+
+  mInstance = vk::createInstanceUnique(InstanceBuilder()
+                                           .SetAppName("Raven")
+                                           .SetAppVersion(1, 0)
+                                           .SetApiVersion(1, 2)
+                                           .RequestValidation(mValidation));
   Log::Debug("[InitializeVulkan] Vulkan Instance created.");
 
-  if (mValidation) {
-    VkCall(CreateDebugger());
-    Log::Debug("[InitializeVulkan] Vulkan Debugger created. <{}>",
-               reinterpret_cast<void*>(mDebugger));
-  }
-
-  VkCall(CreateSurface());
-  Log::Debug("[InitializeVulkan] Vulkan Surface created. <{}>", reinterpret_cast<void*>(mSurface));
+  mSurface = mWindow->CreateSurface(*mInstance);
+  Log::Debug("[InitializeVulkan] Vulkan Surface created. <{}>", static_cast<void*>(*mSurface));
 
   VkCall(SelectPhysicalDevice());
   Log::Debug("[InitializeVulkan] Selected physical device: {}", mDeviceInfo.Properties.deviceName);
@@ -168,195 +63,19 @@ void Application::ShutdownVulkan() {
   DestroySwapchain();
 
   vkDestroyDevice(mDevice, nullptr);
-  vkDestroySurfaceKHR(mInstance, mSurface, nullptr);
-
-  if (mValidation) {
-    PFN_vkDestroyDebugUtilsMessengerEXT func{reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
-        vkGetInstanceProcAddr(mInstance, "vkDestroyDebugUtilsMessengerEXT"))};
-    if (func != nullptr) {
-      func(mInstance, mDebugger, nullptr);
-    }
-  }
-  vkDestroyInstance(mInstance, nullptr);
 }
 
-VkResult Application::CreateInstance(const bool validation) noexcept {
-  // ##########
-  // # Enumerate Vulkan Instance Capabilities
-  // ##########
-  uint32_t instanceVersion{0};
-  vkEnumerateInstanceVersion(&instanceVersion);
-
-  uint32_t availableLayerCount{0};
-  vkEnumerateInstanceLayerProperties(&availableLayerCount, nullptr);
-  std::vector<VkLayerProperties> availableLayers(availableLayerCount);
-  vkEnumerateInstanceLayerProperties(&availableLayerCount, availableLayers.data());
-
-  uint32_t availableExtensionCount{0};
-  vkEnumerateInstanceExtensionProperties(nullptr, &availableExtensionCount, nullptr);
-  std::vector<VkExtensionProperties> availableExtensions(availableExtensionCount);
-  vkEnumerateInstanceExtensionProperties(nullptr, &availableExtensionCount,
-                                         availableExtensions.data());
-
-  // Dump enumerated information
-  {
-    Log::Trace("[CreateInstance] --- Vulkan Instance Information --- ");
-    Log::Trace("[CreateInstance] - Instance Version: {}.{}.{}", VK_VERSION_MAJOR(instanceVersion),
-               VK_VERSION_MINOR(instanceVersion), VK_VERSION_PATCH(instanceVersion));
-    Log::Trace("[CreateInstance] - Available Layers:");
-    for (const auto& layer : availableLayers) {
-      Log::Trace("[CreateInstance]   - {} v{}.{}.{}", layer.layerName,
-                 VK_VERSION_MAJOR(layer.specVersion), VK_VERSION_MINOR(layer.specVersion),
-                 VK_VERSION_PATCH(layer.specVersion));
-    }
-    Log::Trace("[CreateInstance] - Available Extensions:");
-    for (const auto& ext : availableExtensions) {
-      Log::Trace("[CreateInstance]   - {} v{}", ext.extensionName, ext.specVersion);
-    }
-  }
-
-  // ##########
-  // # Determine Application Requirements
-  // ##########
-  constexpr const VkApplicationInfo appInfo{
-      VK_STRUCTURE_TYPE_APPLICATION_INFO,  // sType
-      nullptr,                             // pNext
-      "Raven",                             // pApplicationName
-      VK_MAKE_VERSION(1, 0, 0),            // applicationVersion
-      "Raven",                             // pEngineName
-      VK_MAKE_VERSION(1, 0, 0),            // engineVersion
-      VK_API_VERSION_1_0                   // apiVersion
-  };
-
-  std::vector<const char*> requiredExtensions{VK_KHR_SURFACE_EXTENSION_NAME,
-                                              VK_KHR_WIN32_SURFACE_EXTENSION_NAME};
-  std::vector<const char*> requiredLayers{};
-  if (validation) {
-    requiredExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-    requiredLayers.push_back("VK_LAYER_KHRONOS_validation");
-  }
-
-  // Dump Instance Information
-  {
-    Log::Trace("[CreateInstance] --- Raven VkInstance Info --- ");
-    Log::Trace("[CreateInstance] - API Version: {}.{}", VK_VERSION_MAJOR(appInfo.apiVersion),
-               VK_VERSION_MINOR(appInfo.apiVersion));
-    Log::Trace("[CreateInstance] - Requested Instance Layers ({}):", requiredLayers.size());
-    for (const auto& layer : requiredLayers) {
-      Log::Trace("[CreateInstance]   - {}", layer);
-    }
-    Log::Trace("[CreateInstance] - Requested Instance Extensions:");
-    for (const auto& ext : requiredExtensions) {
-      Log::Trace("[CreateInstance]   - {}", ext);
-    }
-  }
-
-  // ##########
-  // # Validate Application Requirements
-  // ##########
-  {
-    VkResult res{VK_SUCCESS};
-    std::vector<const char*> missingLayers{};
-    std::vector<const char*> missingExtensions{};
-
-    if (VK_VERSION_MAJOR(appInfo.apiVersion) > VK_VERSION_MAJOR(instanceVersion) ||
-        VK_VERSION_MINOR(appInfo.apiVersion) > VK_VERSION_MINOR(instanceVersion)) {
-      Log::Fatal("[CreateInstance] Required Vulkan version {}.{} is not available!",
-                 VK_VERSION_MAJOR(appInfo.apiVersion), VK_VERSION_MINOR(appInfo.apiVersion));
-      Log::Fatal("[CreateInstance] Available Vulkan version is {}.{}.",
-                 VK_VERSION_MAJOR(instanceVersion), VK_VERSION_MINOR(instanceVersion));
-      res = VK_ERROR_INCOMPATIBLE_DRIVER;
-    }
-
-    for (const auto& extName : requiredExtensions) {
-      bool found{false};
-      for (const auto& ext : availableExtensions) {
-        if (strcmp(extName, ext.extensionName) == 0) {
-          found = true;
-          break;
-        }
-      }
-
-      if (!found) {
-        missingExtensions.push_back(extName);
-      }
-    }
-
-    for (const auto& layerName : requiredLayers) {
-      bool found{false};
-      for (const auto& layer : availableLayers) {
-        if (strcmp(layerName, layer.layerName) == 0) {
-          found = true;
-          break;
-        }
-      }
-
-      if (!found) {
-        missingLayers.push_back(layerName);
-      }
-    }
-
-    if (!missingLayers.empty()) {
-      Log::Fatal("[CreateInstance] Required Vulkan Layers are missing:");
-      for (const auto& layer : missingLayers) {
-        Log::Fatal(" - {}", layer);
-      }
-      res = VK_ERROR_LAYER_NOT_PRESENT;
-    }
-
-    if (!missingExtensions.empty()) {
-      Log::Fatal("[CreateInstance] Required Vulkan Extensions are missing:");
-      for (const auto& ext : missingExtensions) {
-        Log::Fatal(" - {}", ext);
-      }
-      res = VK_ERROR_EXTENSION_NOT_PRESENT;
-    }
-
-    if (res != VK_SUCCESS) {
-      return res;
-    }
-  }
-
-  const VkInstanceCreateInfo instanceCI{
-      VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,            // sType
-      &gDebugMessengerCI,                                // pNext
-      0,                                                 // flags
-      &appInfo,                                          // pApplicationInfo
-      static_cast<uint32_t>(requiredLayers.size()),      // enabledLayerCount
-      requiredLayers.data(),                             // ppEnabledLayerNames
-      static_cast<uint32_t>(requiredExtensions.size()),  // enabledExtensionCount
-      requiredExtensions.data()                          // ppEnabledExtensions
-  };
-
-  return vkCreateInstance(&instanceCI, nullptr, &mInstance);
-}
-
-VkResult Application::CreateDebugger() noexcept {
-  PFN_vkCreateDebugUtilsMessengerEXT func{reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
-      vkGetInstanceProcAddr(mInstance, "vkCreateDebugUtilsMessengerEXT"))};
-  if (func == nullptr) {
-    Log::Fatal("[CreateDebugger] Failed to load function vkCreateDebugUtilsMessengerEXT!");
-    return VK_ERROR_EXTENSION_NOT_PRESENT;
-  }
-
-  return func(mInstance, &gDebugMessengerCI, nullptr, &mDebugger);
-}
-
-VkResult Application::CreateSurface() noexcept {
-  mSurface = mWindow->CreateSurface(mInstance);
-
-  return VK_SUCCESS;
-}
+VkResult Application::CreateInstance(const bool validation) noexcept { return VK_SUCCESS; }
 
 VkResult Application::SelectPhysicalDevice() noexcept {
   uint32_t physicalDeviceCount{0};
-  vkEnumeratePhysicalDevices(mInstance, &physicalDeviceCount, nullptr);
+  vkEnumeratePhysicalDevices(*mInstance, &physicalDeviceCount, nullptr);
   if (physicalDeviceCount == 0) {
     Log::Fatal("[SelectPhysicalDevice] No physical devices supporting Vulkan are present!");
     return VK_ERROR_DEVICE_LOST;
   }
   std::vector<VkPhysicalDevice> physicalDevices(physicalDeviceCount);
-  vkEnumeratePhysicalDevices(mInstance, &physicalDeviceCount, physicalDevices.data());
+  vkEnumeratePhysicalDevices(*mInstance, &physicalDeviceCount, physicalDevices.data());
 
   Log::Debug("[SelectPhysicalDevice] Found {} Vulkan devices.", physicalDeviceCount);
   std::vector<PhysicalDeviceInfo> deviceInfos(physicalDeviceCount);
@@ -374,7 +93,7 @@ VkResult Application::SelectPhysicalDevice() noexcept {
       vkGetPhysicalDeviceFeatures(device, &info.Features);
       vkGetPhysicalDeviceMemoryProperties(device, &info.MemoryProperties);
       vkGetPhysicalDeviceProperties(device, &info.Properties);
-      vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, mSurface, &info.SurfaceCapabilities);
+      vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, *mSurface, &info.SurfaceCapabilities);
 
       // Extensions
       uint32_t extensionCount{0};
@@ -395,7 +114,7 @@ VkResult Application::SelectPhysicalDevice() noexcept {
           QueueFamilyInfo& q{info.QueueFamilies[i]};
           q.Index = i;
           q.Properties = queueFamilies[i];
-          vkGetPhysicalDeviceSurfaceSupportKHR(device, i, mSurface, &q.PresentSupport);
+          vkGetPhysicalDeviceSurfaceSupportKHR(device, i, *mSurface, &q.PresentSupport);
         }
       }
 
@@ -449,9 +168,9 @@ VkResult Application::SelectPhysicalDevice() noexcept {
       // Determine Swapchain info
       {
         uint32_t formatCount{0};
-        vkGetPhysicalDeviceSurfaceFormatsKHR(device, mSurface, &formatCount, nullptr);
+        vkGetPhysicalDeviceSurfaceFormatsKHR(device, *mSurface, &formatCount, nullptr);
         std::vector<VkSurfaceFormatKHR> formats(formatCount);
-        vkGetPhysicalDeviceSurfaceFormatsKHR(device, mSurface, &formatCount, formats.data());
+        vkGetPhysicalDeviceSurfaceFormatsKHR(device, *mSurface, &formatCount, formats.data());
 
         if (formatCount == 1 && formats[0].format == VK_FORMAT_UNDEFINED) {
           info.OptimalSwapchainFormat.format = VK_FORMAT_B8G8R8A8_UNORM;
@@ -470,9 +189,9 @@ VkResult Application::SelectPhysicalDevice() noexcept {
         }
 
         uint32_t presentModeCount{0};
-        vkGetPhysicalDeviceSurfacePresentModesKHR(device, mSurface, &presentModeCount, nullptr);
+        vkGetPhysicalDeviceSurfacePresentModesKHR(device, *mSurface, &presentModeCount, nullptr);
         std::vector<VkPresentModeKHR> presentModes(presentModeCount);
-        vkGetPhysicalDeviceSurfacePresentModesKHR(device, mSurface, &presentModeCount,
+        vkGetPhysicalDeviceSurfacePresentModesKHR(device, *mSurface, &presentModeCount,
                                                   presentModes.data());
 
         for (const auto& pm : presentModes) {
@@ -614,7 +333,7 @@ VkResult Application::SelectPhysicalDevice() noexcept {
     return VK_ERROR_INCOMPATIBLE_DRIVER;
   }
 
-  mPhysicalDevice = physicalDevices[bestDevice];
+  mPhysDev = physicalDevices[bestDevice];
   mDeviceInfo = deviceInfos[bestDevice];
 
   return VK_SUCCESS;
@@ -669,7 +388,7 @@ VkResult Application::CreateDevice() noexcept {
     }
   }
 
-  return vkCreateDevice(mPhysicalDevice, &deviceCI, nullptr, &mDevice);
+  return vkCreateDevice(mPhysDev, &deviceCI, nullptr, &mDevice);
 }
 
 void Application::GetQueues() noexcept {
@@ -748,7 +467,7 @@ VkResult Application::CreateSwapchain() noexcept {
       VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,    // sType
       nullptr,                                        // pNext
       0,                                              // flags
-      mSurface,                                       // surface
+      *mSurface,                                      // surface
       mSwapchain.ImageCount,                          // minImageCount
       mDeviceInfo.OptimalSwapchainFormat.format,      // imageFormat
       mDeviceInfo.OptimalSwapchainFormat.colorSpace,  // imageColorSpace

@@ -1,8 +1,7 @@
 #include "Core.h"
 
-#include <vulkan/vulkan_win32.h>
-
-#include "VulkanCore.h"
+#include "Vulkan/Instance.h"
+#include "Vulkan/Surface.h"
 #include "Window.h"
 
 namespace Raven {
@@ -70,16 +69,7 @@ void Window::Update() noexcept {
   }
 }
 
-VkSurfaceKHR Window::CreateSurface(VkInstance instance) const {
-  const VkWin32SurfaceCreateInfoKHR surfaceCI{
-      VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR,  // sType
-      nullptr,                                          // pNext
-      0,                                                // flags
-      ::GetModuleHandleA(nullptr),                      // hinstance
-      mHandle                                           // hwnd
-  };
-  VkSurfaceKHR surface{VK_NULL_HANDLE};
-  vkCreateWin32SurfaceKHR(instance, &surfaceCI, nullptr, &surface);
-  return surface;
+vk::UniqueSurfaceKHR Window::CreateSurface(const vk::Instance& instance) const {
+  return instance.createWin32SurfaceKHRUnique({{}, ::GetModuleHandleA(nullptr), mHandle});
 }
 }  // namespace Raven
