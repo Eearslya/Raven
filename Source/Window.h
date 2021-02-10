@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <string>
 
 namespace Raven {
 namespace Vulkan {
@@ -14,7 +15,8 @@ class Window final {
   Window(const Window&) = delete;
   ~Window();
 
-  void Update() noexcept;
+  bool Update() noexcept;
+  void SetTitle(const std::string& title) noexcept;
   vk::UniqueSurfaceKHR CreateSurface(const vk::Instance& instance) const;
 
  private:

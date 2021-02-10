@@ -8,6 +8,20 @@ namespace Raven {
 constexpr static const char* gWindowClassName{"Raven"};
 static bool gWindowClassCreated{false};
 
+LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+  switch (msg) {
+    case WM_CLOSE:
+      ::PostQuitMessage(0);
+      break;
+
+    case WM_QUIT:
+    case WM_DESTROY:
+      return 0;
+  }
+
+  return DefWindowProcA(hwnd, msg, wParam, lParam);
+}
+
 Window::Window() {
   const HINSTANCE inst{::GetModuleHandleA(nullptr)};
 
@@ -15,7 +29,7 @@ Window::Window() {
     const WNDCLASSEXA wndClass{
         sizeof(WNDCLASSEXA),  // cbSize
         CS_DBLCLKS,           // style,
-        DefWindowProcA,       // lpfnWndProc
+        WndProc,              // lpfnWndProc
         0,                    // cbClsExtra
         0,                    // cbWndExtra
         inst,                 // hInstance,
@@ -61,12 +75,21 @@ Window::Window() {
 
 Window::~Window() { ::DestroyWindow(mHandle); }
 
-void Window::Update() noexcept {
+bool Window::Update() noexcept {
   MSG msg;
   while (::PeekMessageA(&msg, nullptr, 0, 0, PM_REMOVE)) {
+    if (msg.message == WM_QUIT) {
+      return false;
+    }
     TranslateMessage(&msg);
     DispatchMessageA(&msg);
   }
+
+  return true;
+}
+
+void Window::SetTitle(const std::string& title) noexcept {
+  ::SetWindowTextA(mHandle, title.c_str());
 }
 
 vk::UniqueSurfaceKHR Window::CreateSurface(const vk::Instance& instance) const {

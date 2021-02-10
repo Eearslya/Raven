@@ -111,6 +111,7 @@ struct VulkanSwapchain final {
   vk::Extent2D Extent{0, 0};
   std::vector<vk::Image> Images;
   std::vector<vk::UniqueImageView> ImageViews;
+  std::vector<vk::UniqueFramebuffer> Framebuffers;
 };
 
 struct QueueFamilyInfo final {
@@ -165,11 +166,17 @@ class Application final {
   void GetQueues() noexcept;
   VkResult CreateSwapchain() noexcept;
   void CreateRenderPass();
+  void CreateFramebuffers();
   void CreatePipeline();
+  void CreateCommandPools();
+  void CreateCommandBuffers();
+  void CreateSyncObjects();
 
   vk::UniqueShaderModule CreateShaderModule(const std::string& path);
 
   void DestroySwapchain() noexcept;
+
+  void Render();
 
   template <typename Type>
   void SetObjectName(const VkObjectType type, const Type handle, const char* name) noexcept {
@@ -192,6 +199,7 @@ class Application final {
   bool mRunning{false};
   bool mValidation{true};
   std::shared_ptr<Window> mWindow;
+  vk::DynamicLoader mDynamicLoader;
   vk::UniqueInstance mInstance;
   vk::UniqueDebugUtilsMessengerEXT mDebugMessenger;
   vk::UniqueSurfaceKHR mSurface;
@@ -206,5 +214,10 @@ class Application final {
   vk::UniqueRenderPass mRenderPass;
   vk::UniquePipelineLayout mPipelineLayout;
   vk::UniquePipeline mPipeline;
+  vk::UniqueCommandPool mGraphicsPool;
+  std::vector<vk::UniqueCommandBuffer> mGraphicsBuffers;
+  vk::UniqueSemaphore mPresentSemaphore;
+  vk::UniqueSemaphore mRenderSemaphore;
+  vk::UniqueFence mRenderFence;
 };
 }  // namespace Raven

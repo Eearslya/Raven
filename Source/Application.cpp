@@ -1,6 +1,7 @@
 #include "Application.h"
 #include "Core.h"
 
+#include <chrono>
 #include <fstream>
 
 #include "VulkanCore.h"
@@ -129,15 +130,35 @@ Application::~Application() {
 void Application::Run() {
   mRunning = true;
 
+  auto startTime{std::chrono::high_resolution_clock::now()};
+  float msAcc{0.0f};
+  uint64_t sampleCount{0};
   while (mRunning) {
-    mWindow->Update();
+    auto endTime{std::chrono::high_resolution_clock::now()};
+    auto deltaUs{
+        std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime).count()};
+    startTime = endTime;
+    auto deltaMs{deltaUs / 1000.0f};
+    msAcc += deltaMs;
+    sampleCount++;
+
+    if (msAcc > 1000.0f) {
+      const float msAvg{msAcc / sampleCount};
+      const std::string title{fmt::format("Raven - {:.2f}ms ({} FPS)", msAvg, static_cast<uint32_t>(1000.0f / msAvg))};
+      mWindow->SetTitle(title);
+      msAcc = 0.0f;
+      sampleCount = 0;
+    }
+
+    Render();
+
+    mRunning = mWindow->Update();
   }
 }
 
 void Application::InitializeVulkan() {
-  vk::DynamicLoader dl;
   PFN_vkGetInstanceProcAddr loader{
-      dl.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr")};
+      mDynamicLoader.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr")};
   VULKAN_HPP_DEFAULT_DISPATCHER.init(loader);
 
   InstanceBuilder builder;
@@ -176,8 +197,20 @@ void Application::InitializeVulkan() {
   Log::Debug("[InitializeVulkan] Vulkan Render Pass created. <{}>",
              static_cast<void*>(*mRenderPass));
 
+  CreateFramebuffers();
+  Log::Debug("[InitializeVulkan] Vulkan Framebuffers created.");
+
   CreatePipeline();
   Log::Debug("[InitializeVulkan] Vulkan Pipeline created. <{}>", static_cast<void*>(*mPipeline));
+
+  CreateCommandPools();
+  Log::Debug("[InitializeVulkan] Vulkan Command Pools created.");
+
+  CreateCommandBuffers();
+  Log::Debug("[InitializeVulkan] Vulkan Command Buffers created.");
+
+  CreateSyncObjects();
+  Log::Debug("[InitializeVulkan] Vulkan Sync Objects created.");
 }
 
 void Application::ShutdownVulkan() { mDevice->waitIdle(); }
@@ -582,6 +615,44 @@ void Application::DestroySwapchain() noexcept {
   mSwapchain.Swapchain.reset();
 }
 
+void Application::Render() {
+  const std::vector<vk::Fence> renderFences{*mRenderFence};
+  mDevice->waitForFences(renderFences, true, std::numeric_limits<uint64_t>::max());
+  mDevice->resetFences(renderFences);
+
+  uint32_t imageIndex{mDevice->acquireNextImageKHR(
+      *mSwapchain.Swapchain, std::numeric_limits<uint64_t>::max(), *mPresentSemaphore)};
+
+  const vk::UniqueCommandBuffer& cmd{mGraphicsBuffers[imageIndex]};
+
+  const vk::CommandBufferBeginInfo beginInfo;
+  cmd->begin(beginInfo);
+
+  const std::array<float, 4> clearColor{0.0f, 0.0f, 1.0f, 1.0f};
+  const std::vector<vk::ClearValue> clearValues{vk::ClearColorValue(clearColor)};
+  const vk::RenderPassBeginInfo rpInfo(*mRenderPass, *mSwapchain.Framebuffers[imageIndex],
+                                       {{0, 0}, {1600, 900}}, clearValues);
+  cmd->beginRenderPass(rpInfo, vk::SubpassContents::eInline);
+
+  cmd->bindPipeline(vk::PipelineBindPoint::eGraphics, *mPipeline);
+  cmd->draw(3, 1, 0, 0);
+
+  cmd->endRenderPass();
+
+  cmd->end();
+
+  const std::vector<vk::Semaphore> waitSemaphores{*mPresentSemaphore};
+  const std::vector<vk::Semaphore> signalSemaphores{*mRenderSemaphore};
+  const std::vector<vk::PipelineStageFlags> waitStages{
+      vk::PipelineStageFlagBits::eColorAttachmentOutput};
+  const std::vector<vk::CommandBuffer> cmdBuffers{*cmd};
+  const vk::SubmitInfo submitInfo(waitSemaphores, waitStages, cmdBuffers, signalSemaphores);
+  mGraphicsQueue.submit(submitInfo, *mRenderFence);
+
+  const vk::PresentInfoKHR presentInfo(signalSemaphores, *mSwapchain.Swapchain, imageIndex);
+  mGraphicsQueue.presentKHR(presentInfo);
+}
+
 void Application::CreateRenderPass() {
   const vk::AttachmentDescription colorAttachment(
       {}, mDeviceInfo.OptimalSwapchainFormat.format, vk::SampleCountFlagBits::e1,
@@ -598,6 +669,16 @@ void Application::CreateRenderPass() {
 
   const vk::RenderPassCreateInfo renderPassCI({}, attachments, subpasses);
   mRenderPass = mDevice->createRenderPassUnique(renderPassCI);
+}
+
+void Application::CreateFramebuffers() {
+  mSwapchain.Framebuffers.resize(mSwapchain.ImageCount);
+  for (uint32_t i = 0; i < mSwapchain.ImageCount; i++) {
+    const std::vector<vk::ImageView> attachments{*mSwapchain.ImageViews[i]};
+    const vk::FramebufferCreateInfo framebufferCI(
+        {}, *mRenderPass, attachments, mSwapchain.Extent.width, mSwapchain.Extent.height, 1);
+    mSwapchain.Framebuffers[i] = mDevice->createFramebufferUnique(framebufferCI);
+  }
 }
 
 void Application::CreatePipeline() {
@@ -621,16 +702,50 @@ void Application::CreatePipeline() {
   const std::vector<vk::Rect2D> scissors{scissor};
   const vk::PipelineViewportStateCreateInfo viewportState({}, viewports, scissors);
 
-  const vk::PipelineRasterizationStateCreateInfo rasterizer({}, false, false, vk::PolygonMode::eFill, vk::CullModeFlagBits::eNone);
+  const vk::PipelineRasterizationStateCreateInfo rasterizer(
+      {}, false, false, vk::PolygonMode::eFill, vk::CullModeFlagBits::eNone,
+      vk::FrontFace::eCounterClockwise, false, 0.0f, 0.0f, 0.0f, 1.0f);
 
   const vk::PipelineMultisampleStateCreateInfo multisampling;
 
-  const vk::PipelineColorBlendStateCreateInfo colorBlending;
+  const vk::PipelineColorBlendAttachmentState colorBlendAttachment(
+      true, vk::BlendFactor::eSrcAlpha, vk::BlendFactor::eOneMinusSrcAlpha, vk::BlendOp::eAdd,
+      vk::BlendFactor::eOne, vk::BlendFactor::eZero, vk::BlendOp::eAdd,
+      vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+          vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA);
+  const std::vector<vk::PipelineColorBlendAttachmentState> colorBlendAttachments{
+      colorBlendAttachment};
+  const vk::PipelineColorBlendStateCreateInfo colorBlending({}, false, vk::LogicOp::eCopy,
+                                                            colorBlendAttachments);
+
+  const vk::PipelineLayoutCreateInfo pipelineLayoutCI;
+  mPipelineLayout = mDevice->createPipelineLayoutUnique(pipelineLayoutCI);
 
   const vk::GraphicsPipelineCreateInfo pipelineCI(
       {}, stages, &vertexInput, &inputAssembly, {}, &viewportState, &rasterizer, &multisampling, {},
       &colorBlending, {}, *mPipelineLayout, *mRenderPass, 0);
   mPipeline = mDevice->createGraphicsPipelineUnique({}, pipelineCI);
+}
+
+void Application::CreateCommandPools() {
+  const vk::CommandPoolCreateInfo graphicsPoolCI(vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+                                                 mDeviceInfo.GraphicsIndex.value());
+  mGraphicsPool = mDevice->createCommandPoolUnique(graphicsPoolCI);
+}
+
+void Application::CreateCommandBuffers() {
+  const vk::CommandBufferAllocateInfo cmdAI(*mGraphicsPool, vk::CommandBufferLevel::ePrimary,
+                                            mSwapchain.ImageCount);
+  mGraphicsBuffers = mDevice->allocateCommandBuffersUnique(cmdAI);
+}
+
+void Application::CreateSyncObjects() {
+  const vk::SemaphoreCreateInfo semaphoreCI;
+  const vk::FenceCreateInfo fenceCI(vk::FenceCreateFlagBits::eSignaled);
+
+  mRenderSemaphore = mDevice->createSemaphoreUnique(semaphoreCI);
+  mPresentSemaphore = mDevice->createSemaphoreUnique(semaphoreCI);
+  mRenderFence = mDevice->createFenceUnique(fenceCI);
 }
 
 vk::UniqueShaderModule Application::CreateShaderModule(const std::string& path) {
