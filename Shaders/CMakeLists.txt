@@ -4,9 +4,11 @@ else()
   set(GLSL_VALIDATOR "$ENV{VULKAN_SDK}/Bin32/glslangValidator.exe")
 endif()
 
-set(GLSL_SOURCE_FILES)
+set(GLSL_SOURCE_FILES
+    Basic.frag.glsl
+    Basic.vert.glsl)
 
-#file(TOUCH ${GLSL_SOURCE_FILES})
+file(TOUCH ${GLSL_SOURCE_FILES})
 
 set(SHADER_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 set(SHADER_BIN_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/Shaders")

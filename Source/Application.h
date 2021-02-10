@@ -11,18 +11,28 @@ class Window;
 
 class InstanceBuilder final {
  public:
-  InstanceBuilder& SetAppName(const std::string& name) noexcept { mAppName = name; }
+  InstanceBuilder& SetAppName(const std::string& name) noexcept {
+    mAppName = name;
+
+    return *this;
+  }
 
   InstanceBuilder& SetAppVersion(uint32_t major, uint32_t minor, uint32_t patch = 0) noexcept {
     mAppVersion = VK_MAKE_VERSION(major, minor, patch);
+
+    return *this;
   }
 
   InstanceBuilder& RequestValidation(bool validation = true) noexcept {
     mRequestValidation = validation;
+
+    return *this;
   }
 
   InstanceBuilder& SetApiVersion(uint32_t major, uint32_t minor) noexcept {
     mRequiredVersion = VK_MAKE_VERSION(major, minor, 0);
+
+    return *this;
   }
 
   operator vk::InstanceCreateInfo() {
@@ -32,9 +42,10 @@ class InstanceBuilder final {
     const auto availableLayers{vk::enumerateInstanceLayerProperties()};
     const auto availableExtensions{vk::enumerateInstanceExtensionProperties()};
 
-    std::vector<const char*> enabledLayers;
-    std::vector<const char*> enabledExtensions{VK_KHR_SURFACE_EXTENSION_NAME,
-                                               VK_KHR_WIN32_SURFACE_EXTENSION_NAME};
+    mLayers.clear();
+    mExtensions.clear();
+    mExtensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
+    mExtensions.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
 
     bool validation{false};
     if (mRequestValidation) {
@@ -73,14 +84,14 @@ class InstanceBuilder final {
       if (fail) {
         Log::Warn("Validation layers could not be enabled.");
       } else {
-        enabledLayers.insert(enabledLayers.end(), validationLayers.begin(), validationLayers.end());
-        enabledExtensions.insert(enabledExtensions.end(), validationExtensions.begin(),
-                                 validationExtensions.end());
+        mLayers.insert(mLayers.end(), validationLayers.begin(), validationLayers.end());
+        mExtensions.insert(mExtensions.end(), validationExtensions.begin(),
+                           validationExtensions.end());
         validation = true;
       }
     }
 
-    return vk::InstanceCreateInfo({}, &mAppInfo, enabledLayers, enabledExtensions);
+    return vk::InstanceCreateInfo({}, &mAppInfo, mLayers, mExtensions);
   }
 
  private:
@@ -89,39 +100,48 @@ class InstanceBuilder final {
   uint32_t mAppVersion{VK_MAKE_VERSION(1, 0, 0)};
   bool mRequestValidation{false};
   uint32_t mRequiredVersion{VK_API_VERSION_1_0};
+
+  std::vector<const char*> mLayers;
+  std::vector<const char*> mExtensions;
 };
 
 struct VulkanSwapchain final {
-  VkSwapchainKHR Swapchain{VK_NULL_HANDLE};
+  vk::UniqueSwapchainKHR Swapchain;
   uint32_t ImageCount{0};
-  VkExtent2D Extent{0, 0};
-  std::vector<VkImage> Images;
-  std::vector<VkImageView> ImageViews;
+  vk::Extent2D Extent{0, 0};
+  std::vector<vk::Image> Images;
+  std::vector<vk::UniqueImageView> ImageViews;
 };
 
 struct QueueFamilyInfo final {
   uint32_t Index{};
-  VkQueueFamilyProperties Properties{};
-  VkBool32 PresentSupport{VK_FALSE};
+  vk::QueueFamilyProperties Properties{};
+  vk::Bool32 PresentSupport{false};
 
-  constexpr bool Graphics() const { return Properties.queueFlags & VK_QUEUE_GRAPHICS_BIT; }
-  constexpr bool Compute() const { return Properties.queueFlags & VK_QUEUE_COMPUTE_BIT; }
-  constexpr bool Transfer() const { return Properties.queueFlags & VK_QUEUE_TRANSFER_BIT; }
-  constexpr bool SparseBinding() const {
-    return Properties.queueFlags & VK_QUEUE_SPARSE_BINDING_BIT;
+  bool Graphics() const {
+    return static_cast<bool>(Properties.queueFlags & vk::QueueFlagBits::eGraphics);
+  }
+  bool Compute() const {
+    return static_cast<bool>(Properties.queueFlags & vk::QueueFlagBits::eCompute);
+  }
+  bool Transfer() const {
+    return static_cast<bool>(Properties.queueFlags & vk::QueueFlagBits::eTransfer);
+  }
+  bool SparseBinding() const {
+    return static_cast<bool>(Properties.queueFlags & vk::QueueFlagBits::eSparseBinding);
   }
   constexpr bool Present() const { return PresentSupport; }
 };
 
 struct PhysicalDeviceInfo final {
-  VkPhysicalDeviceFeatures Features{};
-  VkPhysicalDeviceMemoryProperties MemoryProperties{};
-  VkPhysicalDeviceProperties Properties{};
+  vk::PhysicalDeviceFeatures Features;
+  vk::PhysicalDeviceMemoryProperties MemoryProperties;
+  vk::PhysicalDeviceProperties Properties;
   std::vector<QueueFamilyInfo> QueueFamilies;
-  std::vector<VkExtensionProperties> Extensions;
-  VkSurfaceCapabilitiesKHR SurfaceCapabilities{};
-  VkSurfaceFormatKHR OptimalSwapchainFormat{};
-  VkPresentModeKHR OptimalPresentMode{VK_PRESENT_MODE_FIFO_KHR};
+  std::vector<vk::ExtensionProperties> Extensions;
+  vk::SurfaceCapabilitiesKHR SurfaceCapabilities;
+  vk::SurfaceFormatKHR OptimalSwapchainFormat;
+  vk::PresentModeKHR OptimalPresentMode;
 
   std::optional<uint32_t> GraphicsIndex;
   std::optional<uint32_t> ComputeIndex;
@@ -144,6 +164,10 @@ class Application final {
   VkResult CreateDevice() noexcept;
   void GetQueues() noexcept;
   VkResult CreateSwapchain() noexcept;
+  void CreateRenderPass();
+  void CreatePipeline();
+
+  vk::UniqueShaderModule CreateShaderModule(const std::string& path);
 
   void DestroySwapchain() noexcept;
 
@@ -169,15 +193,18 @@ class Application final {
   bool mValidation{true};
   std::shared_ptr<Window> mWindow;
   vk::UniqueInstance mInstance;
+  vk::UniqueDebugUtilsMessengerEXT mDebugMessenger;
   vk::UniqueSurfaceKHR mSurface;
-  std::shared_ptr<Vulkan::PhysicalDevice> mPhysicalDevice;
-  VkPhysicalDevice mPhysDev{VK_NULL_HANDLE};
+  vk::PhysicalDevice mPhysicalDevice;
   PhysicalDeviceInfo mDeviceInfo{};
-  VkDevice mDevice{VK_NULL_HANDLE};
-  VkQueue mGraphicsQueue{VK_NULL_HANDLE};
-  VkQueue mPresentQueue{VK_NULL_HANDLE};
-  VkQueue mTransferQueue{VK_NULL_HANDLE};
-  VkQueue mComputeQueue{VK_NULL_HANDLE};
+  vk::UniqueDevice mDevice;
+  vk::Queue mGraphicsQueue;
+  vk::Queue mPresentQueue;
+  vk::Queue mTransferQueue;
+  vk::Queue mComputeQueue;
   VulkanSwapchain mSwapchain{};
+  vk::UniqueRenderPass mRenderPass;
+  vk::UniquePipelineLayout mPipelineLayout;
+  vk::UniquePipeline mPipeline;
 };
 }  // namespace Raven
