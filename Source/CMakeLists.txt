@@ -35,7 +35,7 @@ source_group("Precompiled Headers" FILES ${PCH_FILES})
 set_property(TARGET Raven PROPERTY CXX_STANDARD 17)
 set_property(TARGET Raven PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:Raven>")
 target_include_directories(Raven PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(Raven Vulkan::Vulkan glm imgui stb fmt)
+target_link_libraries(Raven Vulkan::Vulkan glm imgui stb fmt tinygltf)
 add_dependencies(Raven Assets Shaders)
 
 if (MSVC)

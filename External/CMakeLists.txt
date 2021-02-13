@@ -24,3 +24,6 @@ set_property(TARGET fmt PROPERTY FOLDER "Dependencies")
 
 add_library(stb INTERFACE)
 target_include_directories(stb INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/stb")
+
+add_library(tinygltf INTERFACE)
+target_include_directories(tinygltf INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/tinygltf")

@@ -1,6 +1,10 @@
 set(IMAGE_FILES)
 
-set(MODEL_FILES)
+set(MODEL_FILES
+    Models/Suzanne.bin
+    Models/Suzanne.gltf
+    Models/Suzanne_BaseColor.png
+    Models/Suzanne_MetallicRoughness.png)
 
 set(ASSET_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 set(ASSET_BIN_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/Assets")
@@ -15,6 +19,6 @@ add_custom_target(Assets)
 #add_custom_command(TARGET Assets POST_BUILD
 #    WORKING_DIRECTORY ${ASSET_SRC_DIR}
 #    COMMAND ${CMAKE_COMMAND} -E copy ${IMAGE_FILES} ${IMAGE_BIN_DIR})
-#add_custom_command(TARGET Assets POST_BUILD
-#    WORKING_DIRECTORY ${ASSET_SRC_DIR}
-#    COMMAND ${CMAKE_COMMAND} -E copy ${MODEL_FILES} ${MODEL_BIN_DIR})
+add_custom_command(TARGET Assets POST_BUILD
+    WORKING_DIRECTORY ${ASSET_SRC_DIR}
+    COMMAND ${CMAKE_COMMAND} -E copy ${MODEL_FILES} ${MODEL_BIN_DIR})

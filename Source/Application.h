@@ -1,5 +1,6 @@
 #pragma once
 
+#include <glm/glm.hpp>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -8,6 +9,36 @@
 
 namespace Raven {
 class Window;
+
+struct GlobalConstantBuffer {
+  glm::mat4 ViewProjection;
+};
+
+struct Vertex {
+  glm::vec3 Position;
+  glm::vec3 Normal;
+};
+
+class Buffer {
+ public:
+  Buffer(vk::UniqueBuffer buffer, vk::UniqueDeviceMemory memory, vk::DeviceSize size);
+  Buffer(const Buffer&) = delete;
+  Buffer(Buffer&& o);
+  ~Buffer();
+
+  vk::UniqueBuffer Handle;
+  vk::UniqueDeviceMemory Memory;
+  vk::DeviceSize Size;
+};
+
+struct Mesh {
+  Buffer VertexBuffer;
+  uint64_t VertexCount;
+
+  Mesh(Buffer buffer, uint64_t vertices);
+  Mesh(const Mesh&) = delete;
+  ~Mesh();
+};
 
 class InstanceBuilder final {
  public:
@@ -171,8 +202,14 @@ class Application final {
   void CreateCommandPools();
   void CreateCommandBuffers();
   void CreateSyncObjects();
+  void CreateScene();
 
+  Buffer CreateBuffer(const vk::DeviceSize size, vk::BufferUsageFlags usage,
+                      vk::MemoryPropertyFlags memoryType);
+  Buffer CreateVertexBuffer(const std::vector<Vertex>& vertices);
+  uint32_t FindMemoryType(uint32_t filter, vk::MemoryPropertyFlags properties);
   vk::UniqueShaderModule CreateShaderModule(const std::string& path);
+  std::shared_ptr<Mesh> LoadMesh(const std::string& path);
 
   void DestroySwapchain() noexcept;
 
@@ -213,11 +250,15 @@ class Application final {
   VulkanSwapchain mSwapchain{};
   vk::UniqueRenderPass mRenderPass;
   vk::UniquePipelineLayout mPipelineLayout;
-  vk::UniquePipeline mPipeline;
+  vk::UniquePipelineLayout mTriPipelineLayout;
+  vk::UniquePipeline mBgPipeline;
+  vk::UniquePipeline mTriPipeline;
   vk::UniqueCommandPool mGraphicsPool;
   std::vector<vk::UniqueCommandBuffer> mGraphicsBuffers;
   vk::UniqueSemaphore mPresentSemaphore;
   vk::UniqueSemaphore mRenderSemaphore;
   vk::UniqueFence mRenderFence;
+
+  std::vector<std::shared_ptr<Mesh>> mMeshes;
 };
 }  // namespace Raven

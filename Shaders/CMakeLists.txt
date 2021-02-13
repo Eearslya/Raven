@@ -6,7 +6,9 @@ endif()
 
 set(GLSL_SOURCE_FILES
     Basic.frag.glsl
-    Basic.vert.glsl)
+    Basic.vert.glsl
+    Tri.frag
+    Tri.vert)
 
 file(TOUCH ${GLSL_SOURCE_FILES})
 

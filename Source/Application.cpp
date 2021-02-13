@@ -1,8 +1,14 @@
+#define TINYGLTF_IMPLEMENTATION
+#define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+
 #include "Application.h"
 #include "Core.h"
 
 #include <chrono>
 #include <fstream>
+#include <glm/gtc/matrix_transform.hpp>
+#include <tiny_gltf.h>
 
 #include "VulkanCore.h"
 #include "Window.h"
@@ -144,7 +150,8 @@ void Application::Run() {
 
     if (msAcc > 1000.0f) {
       const float msAvg{msAcc / sampleCount};
-      const std::string title{fmt::format("Raven - {:.2f}ms ({} FPS)", msAvg, static_cast<uint32_t>(1000.0f / msAvg))};
+      const std::string title{
+          fmt::format("Raven - {:.2f}ms ({} FPS)", msAvg, static_cast<uint32_t>(1000.0f / msAvg))};
       mWindow->SetTitle(title);
       msAcc = 0.0f;
       sampleCount = 0;
@@ -201,7 +208,7 @@ void Application::InitializeVulkan() {
   Log::Debug("[InitializeVulkan] Vulkan Framebuffers created.");
 
   CreatePipeline();
-  Log::Debug("[InitializeVulkan] Vulkan Pipeline created. <{}>", static_cast<void*>(*mPipeline));
+  Log::Debug("[InitializeVulkan] Vulkan Pipeline created. <{}>", static_cast<void*>(*mBgPipeline));
 
   CreateCommandPools();
   Log::Debug("[InitializeVulkan] Vulkan Command Pools created.");
@@ -211,6 +218,8 @@ void Application::InitializeVulkan() {
 
   CreateSyncObjects();
   Log::Debug("[InitializeVulkan] Vulkan Sync Objects created.");
+
+  CreateScene();
 }
 
 void Application::ShutdownVulkan() { mDevice->waitIdle(); }
@@ -616,9 +625,8 @@ void Application::DestroySwapchain() noexcept {
 }
 
 void Application::Render() {
-  const std::vector<vk::Fence> renderFences{*mRenderFence};
-  mDevice->waitForFences(renderFences, true, std::numeric_limits<uint64_t>::max());
-  mDevice->resetFences(renderFences);
+  mDevice->waitForFences(*mRenderFence, true, std::numeric_limits<uint64_t>::max());
+  mDevice->resetFences(*mRenderFence);
 
   uint32_t imageIndex{mDevice->acquireNextImageKHR(
       *mSwapchain.Swapchain, std::numeric_limits<uint64_t>::max(), *mPresentSemaphore)};
@@ -634,8 +642,21 @@ void Application::Render() {
                                        {{0, 0}, {1600, 900}}, clearValues);
   cmd->beginRenderPass(rpInfo, vk::SubpassContents::eInline);
 
-  cmd->bindPipeline(vk::PipelineBindPoint::eGraphics, *mPipeline);
+  cmd->bindPipeline(vk::PipelineBindPoint::eGraphics, *mBgPipeline);
   cmd->draw(3, 1, 0, 0);
+
+  cmd->bindPipeline(vk::PipelineBindPoint::eGraphics, *mTriPipeline);
+  const GlobalConstantBuffer globalCB{
+      glm::perspective(glm::radians(70.0f), 16.0f / 9.0f, 0.1f, 1000.0f) *
+      glm::lookAt(glm::vec3(0, 0, -2), glm::vec3(0, 0, 0), glm::vec3(0, 1, 0))};
+  cmd->pushConstants<GlobalConstantBuffer>(*mTriPipelineLayout, vk::ShaderStageFlagBits::eVertex, 0,
+                                           globalCB);
+  for (const auto& mesh : mMeshes) {
+    // Not declaring this as its own vector makes CL panic and die.
+    const std::vector<vk::DeviceSize> offset{0};
+    cmd->bindVertexBuffers(0, *(mesh->VertexBuffer.Handle), offset);
+    cmd->draw(mesh->VertexCount, 1, 0, 0);
+  }
 
   cmd->endRenderPass();
 
@@ -682,16 +703,33 @@ void Application::CreateFramebuffers() {
 }
 
 void Application::CreatePipeline() {
-  auto vertShader{CreateShaderModule("../Shaders/Basic.vert.glsl.spv")};
-  auto fragShader{CreateShaderModule("../Shaders/Basic.frag.glsl.spv")};
+  auto bgVertShader{CreateShaderModule("../Shaders/Basic.vert.glsl.spv")};
+  auto bgFragShader{CreateShaderModule("../Shaders/Basic.frag.glsl.spv")};
+  auto triVertShader{CreateShaderModule("../Shaders/Tri.vert.spv")};
+  auto triFragShader{CreateShaderModule("../Shaders/Tri.frag.spv")};
 
-  const vk::PipelineShaderStageCreateInfo vertStage({}, vk::ShaderStageFlagBits::eVertex,
-                                                    *vertShader, "main");
-  const vk::PipelineShaderStageCreateInfo fragStage({}, vk::ShaderStageFlagBits::eFragment,
-                                                    *fragShader, "main");
-  const std::vector<vk::PipelineShaderStageCreateInfo> stages{vertStage, fragStage};
+  const vk::PipelineShaderStageCreateInfo bgVertStage({}, vk::ShaderStageFlagBits::eVertex,
+                                                      *bgVertShader, "main");
+  const vk::PipelineShaderStageCreateInfo bgFragStage({}, vk::ShaderStageFlagBits::eFragment,
+                                                      *bgFragShader, "main");
+  const std::vector<vk::PipelineShaderStageCreateInfo> bgStages{bgVertStage, bgFragStage};
 
-  const vk::PipelineVertexInputStateCreateInfo vertexInput;
+  const vk::PipelineShaderStageCreateInfo triVertStage({}, vk::ShaderStageFlagBits::eVertex,
+                                                       *triVertShader, "main");
+  const vk::PipelineShaderStageCreateInfo triFragStage({}, vk::ShaderStageFlagBits::eFragment,
+                                                       *triFragShader, "main");
+  const std::vector<vk::PipelineShaderStageCreateInfo> triStages{triVertStage, triFragStage};
+
+  const std::vector<vk::VertexInputBindingDescription> triBindingDesc{
+      vk::VertexInputBindingDescription(0, sizeof(Vertex), vk::VertexInputRate::eVertex)};
+  const std::vector<vk::VertexInputAttributeDescription> triAttributeDesc{
+      vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32B32Sfloat,
+                                          offsetof(Vertex, Position)),
+      vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32B32Sfloat,
+                                          offsetof(Vertex, Normal))};
+
+  const vk::PipelineVertexInputStateCreateInfo blankVertexInput;
+  const vk::PipelineVertexInputStateCreateInfo triVertexInput({}, triBindingDesc, triAttributeDesc);
 
   const vk::PipelineInputAssemblyStateCreateInfo inputAssembly(
       {}, vk::PrimitiveTopology::eTriangleList, false);
@@ -721,10 +759,21 @@ void Application::CreatePipeline() {
   const vk::PipelineLayoutCreateInfo pipelineLayoutCI;
   mPipelineLayout = mDevice->createPipelineLayoutUnique(pipelineLayoutCI);
 
+  const std::vector<vk::DescriptorSetLayout> triSetLayouts;
+  const std::vector<vk::PushConstantRange> constants{
+      vk::PushConstantRange(vk::ShaderStageFlagBits::eVertex, 0, sizeof(GlobalConstantBuffer))};
+  const vk::PipelineLayoutCreateInfo triPipelineLayoutCI({}, triSetLayouts, constants);
+  mTriPipelineLayout = mDevice->createPipelineLayoutUnique(triPipelineLayoutCI);
+
   const vk::GraphicsPipelineCreateInfo pipelineCI(
-      {}, stages, &vertexInput, &inputAssembly, {}, &viewportState, &rasterizer, &multisampling, {},
-      &colorBlending, {}, *mPipelineLayout, *mRenderPass, 0);
-  mPipeline = mDevice->createGraphicsPipelineUnique({}, pipelineCI);
+      {}, bgStages, &blankVertexInput, &inputAssembly, {}, &viewportState, &rasterizer,
+      &multisampling, {}, &colorBlending, {}, *mPipelineLayout, *mRenderPass, 0);
+  mBgPipeline = mDevice->createGraphicsPipelineUnique({}, pipelineCI);
+
+  const vk::GraphicsPipelineCreateInfo triPipelineCI(
+      {}, triStages, &triVertexInput, &inputAssembly, {}, &viewportState, &rasterizer,
+      &multisampling, {}, &colorBlending, {}, *mTriPipelineLayout, *mRenderPass, 0);
+  mTriPipeline = mDevice->createGraphicsPipelineUnique({}, triPipelineCI);
 }
 
 void Application::CreateCommandPools() {
@@ -748,6 +797,59 @@ void Application::CreateSyncObjects() {
   mRenderFence = mDevice->createFenceUnique(fenceCI);
 }
 
+void Application::CreateScene() {
+  const std::vector<Vertex> triVertices{Vertex{glm::vec3{1.0f, -1.0f, 0.0f}},
+                                        Vertex{glm::vec3{-1.0f, -1.0f, 0.0f}},
+                                        Vertex{glm::vec3{0.0f, 1.0f, 0.0f}}};
+  Buffer triBuffer{CreateVertexBuffer(triVertices)};
+  std::shared_ptr<Mesh> tri{std::make_shared<Mesh>(std::move(triBuffer), 3)};
+  mMeshes.push_back(tri);
+
+  auto suzanne{LoadMesh("../Assets/Models/Suzanne.gltf")};
+  mMeshes.push_back(suzanne);
+}
+
+Buffer Application::CreateBuffer(const vk::DeviceSize size, vk::BufferUsageFlags usage,
+                                 vk::MemoryPropertyFlags memoryType) {
+  const vk::BufferCreateInfo bufferCI({}, size, usage);
+  vk::UniqueBuffer buffer{mDevice->createBufferUnique(bufferCI)};
+
+  const vk::MemoryRequirements require{mDevice->getBufferMemoryRequirements(*buffer)};
+  const uint32_t memType{FindMemoryType(
+      require.memoryTypeBits,
+      vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent)};
+
+  const vk::MemoryAllocateInfo memoryAI(require.size, memType);
+  vk::UniqueDeviceMemory memory{mDevice->allocateMemoryUnique(memoryAI)};
+
+  mDevice->bindBufferMemory(*buffer, *memory, 0);
+
+  return Buffer(std::move(buffer), std::move(memory), require.size);
+}
+
+Buffer Application::CreateVertexBuffer(const std::vector<Vertex>& vertices) {
+  Buffer vBuf{CreateBuffer(
+      vertices.size() * sizeof(Vertex), vk::BufferUsageFlagBits::eVertexBuffer,
+      vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent)};
+
+  void* mem{mDevice->mapMemory(*vBuf.Memory, 0, vBuf.Size, {})};
+  memcpy(mem, vertices.data(), vBuf.Size);
+  mDevice->unmapMemory(*vBuf.Memory);
+
+  return vBuf;
+}
+
+uint32_t Application::FindMemoryType(uint32_t filter, vk::MemoryPropertyFlags properties) {
+  for (uint32_t i = 0; i < mDeviceInfo.MemoryProperties.memoryTypeCount; i++) {
+    if ((filter & (1 << i)) &&
+        (mDeviceInfo.MemoryProperties.memoryTypes[i].propertyFlags & properties) == properties) {
+      return i;
+    }
+  }
+
+  throw std::runtime_error("No memory type is available that meets requirements!");
+}
+
 vk::UniqueShaderModule Application::CreateShaderModule(const std::string& path) {
   std::ifstream file(path, std::ios::ate | std::ios::binary);
   const size_t fileSize{static_cast<size_t>(file.tellg())};
@@ -760,4 +862,69 @@ vk::UniqueShaderModule Application::CreateShaderModule(const std::string& path) 
                                                   reinterpret_cast<uint32_t*>(buffer.data()));
   return mDevice->createShaderModuleUnique(shaderModuleCI);
 }
+
+std::shared_ptr<Mesh> Application::LoadMesh(const std::string& path) {
+  tinygltf::Model model;
+  tinygltf::TinyGLTF loader;
+  std::string err;
+  std::string warn;
+
+  bool ret = loader.LoadASCIIFromFile(&model, &err, &warn, path.c_str());
+
+  if (!warn.empty()) {
+    Log::Warn("Warn: %s\n", warn.c_str());
+  }
+
+  if (!err.empty()) {
+    Log::Error("Err: %s\n", err.c_str());
+  }
+
+  if (!ret) {
+    Log::Error("Failed to parse glTF model {}", path);
+    return nullptr;
+  }
+
+  std::vector<Vertex> vertices;
+  for (const auto& m : model.meshes) {
+    for (const auto& p : m.primitives) {
+      const tinygltf::Accessor& pos{model.accessors[p.attributes.find("POSITION")->second]};
+      const tinygltf::BufferView& posBufView{model.bufferViews[pos.bufferView]};
+      const tinygltf::Buffer& posBuf = model.buffers[posBufView.buffer];
+      const float* positions =
+          reinterpret_cast<const float*>(&posBuf.data[posBufView.byteOffset + pos.byteOffset]);
+
+      const tinygltf::Accessor& norm{model.accessors[p.attributes.find("NORMAL")->second]};
+      const tinygltf::BufferView& normalBufView{model.bufferViews[norm.bufferView]};
+      const tinygltf::Buffer& normalBuf = model.buffers[normalBufView.buffer];
+      const float* normals = reinterpret_cast<const float*>(
+          &normalBuf.data[normalBufView.byteOffset + norm.byteOffset]);
+
+      for (size_t i = 0; i < pos.count; i++) {
+        vertices.push_back(
+            Vertex{glm::vec3{positions[i * 3 + 0], positions[i * 3 + 1], positions[i * 3 + 2]},
+                   glm::vec3{normals[i * 3 + 0], normals[i * 3 + 1], normals[i * 3 + 2]}});
+      }
+    }
+  }
+
+  Buffer buffer{CreateVertexBuffer(vertices)};
+
+  return std::make_shared<Mesh>(std::move(buffer), vertices.size());
+}
+
+Buffer::Buffer(vk::UniqueBuffer buffer, vk::UniqueDeviceMemory memory, vk::DeviceSize size)
+    : Handle(std::move(buffer)), Memory(std::move(memory)), Size(size) {}
+
+Buffer::Buffer(Buffer&& o) {
+  Handle = std::move(o.Handle);
+  Memory = std::move(o.Memory);
+  Size = o.Size;
+}
+
+Buffer::~Buffer() {}
+
+Mesh::Mesh(Buffer buffer, uint64_t vertices)
+    : VertexBuffer(std::move(buffer)), VertexCount(vertices) {}
+
+Mesh::~Mesh() {}
 }  // namespace Raven
