@@ -5,8 +5,8 @@ else()
 endif()
 
 set(GLSL_SOURCE_FILES
-    Basic.frag.glsl
-    Basic.vert.glsl
+    Basic.frag
+    Basic.vert
     Tri.frag
     Tri.vert)
 

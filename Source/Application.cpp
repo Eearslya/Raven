@@ -16,15 +16,9 @@
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
 namespace Raven {
-const std::vector<vk::VertexInputBindingDescription> Vertex::Bindings =
-    std::vector<vk::VertexInputBindingDescription>{
-        vk::VertexInputBindingDescription(0, sizeof(Vertex), vk::VertexInputRate::eVertex)};
-const std::vector<vk::VertexInputAttributeDescription> Vertex::Attributes =
-    std::vector<vk::VertexInputAttributeDescription>{
-        vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32B32Sfloat,
-                                            offsetof(Vertex, Position)),
-        vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32B32Sfloat,
-                                            offsetof(Vertex, Normal))};
+/* ==========================================================================================
+ * Vulkan Debug Callbacks and Info
+ * ========================================================================================== */
 
 VkBool32 VulkanDebugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
                              VkDebugUtilsMessageTypeFlagsEXT messageTypes,
@@ -130,6 +124,172 @@ constexpr const vk::DebugUtilsMessengerCreateInfoEXT gDebugMessengerCI(
         vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation,
     VulkanDebugCallback, nullptr);
 
+/* ==========================================================================================
+ * Local Helper Classes
+ * ========================================================================================== */
+
+class InstanceBuilder final {
+ public:
+  InstanceBuilder& SetAppName(const std::string& name) noexcept {
+    mAppName = name;
+
+    return *this;
+  }
+
+  InstanceBuilder& SetAppVersion(uint32_t major, uint32_t minor, uint32_t patch = 0) noexcept {
+    mAppVersion = VK_MAKE_VERSION(major, minor, patch);
+
+    return *this;
+  }
+
+  InstanceBuilder& RequestValidation(bool validation = true) noexcept {
+    mRequestValidation = validation;
+
+    return *this;
+  }
+
+  InstanceBuilder& SetApiVersion(uint32_t major, uint32_t minor) noexcept {
+    mRequiredVersion = VK_MAKE_VERSION(major, minor, 0);
+
+    return *this;
+  }
+
+  operator vk::InstanceCreateInfo() {
+    mAppInfo = vk::ApplicationInfo(mAppName.c_str(), mAppVersion, "Raven", VK_MAKE_VERSION(1, 0, 0),
+                                   mRequiredVersion);
+
+    const auto availableLayers{vk::enumerateInstanceLayerProperties()};
+    const auto availableExtensions{vk::enumerateInstanceExtensionProperties()};
+
+    mLayers.clear();
+    mExtensions.clear();
+    mExtensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
+    mExtensions.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
+
+    bool validation{false};
+    if (mRequestValidation) {
+      const std::vector<const char*> validationLayers{"VK_LAYER_KHRONOS_validation"};
+      const std::vector<const char*> validationExtensions{VK_EXT_DEBUG_UTILS_EXTENSION_NAME};
+      bool fail{false};
+
+      for (const auto& layerName : validationLayers) {
+        bool found{false};
+        for (const auto& layer : availableLayers) {
+          if (strcmp(layerName, layer.layerName) == 0) {
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          fail = true;
+          Log::Warn("Missing required layer for validation: {}", layerName);
+        }
+      }
+
+      for (const auto& extName : validationExtensions) {
+        bool found{false};
+        for (const auto& ext : availableExtensions) {
+          if (strcmp(extName, ext.extensionName) == 0) {
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          fail = true;
+          Log::Warn("Missing required extension for validation: {}", extName);
+        }
+      }
+
+      if (fail) {
+        Log::Warn("Validation layers could not be enabled.");
+      } else {
+        mLayers.insert(mLayers.end(), validationLayers.begin(), validationLayers.end());
+        mExtensions.insert(mExtensions.end(), validationExtensions.begin(),
+                           validationExtensions.end());
+        validation = true;
+      }
+    }
+
+    return vk::InstanceCreateInfo({}, &mAppInfo, mLayers, mExtensions);
+  }
+
+ private:
+  vk::ApplicationInfo mAppInfo;
+  std::string mAppName{"Raven"};
+  uint32_t mAppVersion{VK_MAKE_VERSION(1, 0, 0)};
+  bool mRequestValidation{false};
+  uint32_t mRequiredVersion{VK_API_VERSION_1_0};
+
+  std::vector<const char*> mLayers;
+  std::vector<const char*> mExtensions;
+};
+
+class PipelineBuilder final {
+ public:
+  PipelineBuilder(vk::Extent2D extent) {
+    InputAssembly =
+        vk::PipelineInputAssemblyStateCreateInfo({}, vk::PrimitiveTopology::eTriangleList, false);
+
+    Viewport = vk::Viewport(0, 0, extent.width, extent.height, 0.0f, 1.0f);
+    Scissor = vk::Rect2D({0, 0}, extent);
+
+    Rasterizer = vk::PipelineRasterizationStateCreateInfo(
+        {}, false, false, vk::PolygonMode::eFill, vk::CullModeFlagBits::eNone,
+        vk::FrontFace::eCounterClockwise, false, 0.0f, 0.0f, 0.0f, 1.0f);
+
+    Multisampling = vk::PipelineMultisampleStateCreateInfo();
+
+    DepthStencil = vk::PipelineDepthStencilStateCreateInfo();
+
+    ColorAttachment = vk::PipelineColorBlendAttachmentState(
+        true, vk::BlendFactor::eSrcAlpha, vk::BlendFactor::eOneMinusSrcAlpha, vk::BlendOp::eAdd,
+        vk::BlendFactor::eOne, vk::BlendFactor::eZero, vk::BlendOp::eAdd,
+        vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+            vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA);
+    ColorBlending =
+        vk::PipelineColorBlendStateCreateInfo({}, false, vk::LogicOp::eCopy, ColorAttachment);
+  }
+
+  operator vk::GraphicsPipelineCreateInfo() {
+    ViewportState = vk::PipelineViewportStateCreateInfo({}, Viewport, Scissor);
+
+    return vk::GraphicsPipelineCreateInfo({}, ShaderStages, &VertexInput, &InputAssembly,
+                                          &Tesselation, &ViewportState, &Rasterizer, &Multisampling,
+                                          &DepthStencil, &ColorBlending, {}, Layout, RenderPass, 0);
+  }
+
+  PipelineBuilder& AddShader(vk::ShaderStageFlagBits stage, vk::ShaderModule& shader) {
+    ShaderStages.push_back(vk::PipelineShaderStageCreateInfo({}, stage, shader, "main"));
+
+    return *this;
+  }
+
+  PipelineBuilder& ClearShaders() {
+    ShaderStages.clear();
+
+    return *this;
+  }
+
+  std::vector<vk::PipelineShaderStageCreateInfo> ShaderStages;
+  vk::PipelineVertexInputStateCreateInfo VertexInput;
+  vk::PipelineInputAssemblyStateCreateInfo InputAssembly;
+  vk::PipelineTessellationStateCreateInfo Tesselation;
+  vk::Viewport Viewport;
+  vk::Rect2D Scissor;
+  vk::PipelineViewportStateCreateInfo ViewportState;
+  vk::PipelineRasterizationStateCreateInfo Rasterizer;
+  vk::PipelineMultisampleStateCreateInfo Multisampling;
+  vk::PipelineDepthStencilStateCreateInfo DepthStencil;
+  vk::PipelineColorBlendAttachmentState ColorAttachment;
+  vk::PipelineColorBlendStateCreateInfo ColorBlending;
+  vk::PipelineLayout Layout;
+  vk::RenderPass RenderPass;
+};
+
+/* ==========================================================================================
+ * Public Application Methods
+ * ========================================================================================== */
+
 Application::Application(const std::vector<const char*>& cmdArgs) {
   // TODO: Command line arguments?
   Log::Info("Raven is starting...");
@@ -173,6 +333,52 @@ void Application::Run() {
   }
 }
 
+/* ==========================================================================================
+ * Private Application Methods
+ * ========================================================================================== */
+
+void Application::Render() {
+  mDevice->waitForFences(*mRenderFence, true, std::numeric_limits<uint64_t>::max());
+  mDevice->resetFences(*mRenderFence);
+
+  uint32_t imageIndex{mDevice->acquireNextImageKHR(
+      *mSwapchain.Swapchain, std::numeric_limits<uint64_t>::max(), *mPresentSemaphore)};
+
+  const vk::UniqueCommandBuffer& cmd{mGraphicsBuffers[imageIndex]};
+
+  const vk::CommandBufferBeginInfo beginInfo;
+  cmd->begin(beginInfo);
+
+  const std::array<float, 4> clearColor{0.0f, 0.0f, 1.0f, 1.0f};
+  const std::vector<vk::ClearValue> clearValues{vk::ClearColorValue(clearColor),
+                                                vk::ClearDepthStencilValue(1.0f, 0)};
+  const vk::RenderPassBeginInfo rpInfo(*mRenderPass, *mSwapchain.Framebuffers[imageIndex],
+                                       {{0, 0}, mSwapchain.Extent}, clearValues);
+  cmd->beginRenderPass(rpInfo, vk::SubpassContents::eInline);
+
+  cmd->bindPipeline(vk::PipelineBindPoint::eGraphics, *mBgPipeline);
+  cmd->draw(3, 1, 0, 0);
+
+  cmd->endRenderPass();
+
+  cmd->end();
+
+  const std::vector<vk::Semaphore> waitSemaphores{*mPresentSemaphore};
+  const std::vector<vk::Semaphore> signalSemaphores{*mRenderSemaphore};
+  const std::vector<vk::PipelineStageFlags> waitStages{
+      vk::PipelineStageFlagBits::eColorAttachmentOutput};
+  const std::vector<vk::CommandBuffer> cmdBuffers{*cmd};
+  const vk::SubmitInfo submitInfo(waitSemaphores, waitStages, cmdBuffers, signalSemaphores);
+  mGraphicsQueue.submit(submitInfo, *mRenderFence);
+
+  const vk::PresentInfoKHR presentInfo(signalSemaphores, *mSwapchain.Swapchain, imageIndex);
+  mGraphicsQueue.presentKHR(presentInfo);
+}
+
+/* ==========================================================================================
+ * Application/Vulkan Setup
+ * ========================================================================================== */
+
 void Application::InitializeVulkan() {
   PFN_vkGetInstanceProcAddr loader{
       mDynamicLoader.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr")};
@@ -195,17 +401,17 @@ void Application::InitializeVulkan() {
   mSurface = mWindow->CreateSurface(*mInstance);
   Log::Debug("[InitializeVulkan] Vulkan Surface created. <{}>", static_cast<void*>(*mSurface));
 
-  VkCall(SelectPhysicalDevice());
+  SelectPhysicalDevice();
   Log::Debug("[InitializeVulkan] Selected physical device: {}", mDeviceInfo.Properties.deviceName);
 
-  VkCall(CreateDevice());
+  CreateDevice();
   Log::Debug("[InitializeVulkan] Vulkan Device created. <{}>", static_cast<void*>(*mDevice));
   VULKAN_HPP_DEFAULT_DISPATCHER.init(*mDevice);
 
   GetQueues();
   Log::Debug("[InitializeVulkan] Device queues retrieved.");
 
-  VkCall(CreateSwapchain());
+  CreateSwapchain();
   Log::Debug("[InitializeVulkan] Vulkan Swapchain created with {} images. <{}>",
              mSwapchain.ImageCount, static_cast<void*>(*mSwapchain.Swapchain));
 
@@ -233,9 +439,7 @@ void Application::InitializeVulkan() {
 
 void Application::ShutdownVulkan() { mDevice->waitIdle(); }
 
-VkResult Application::CreateInstance(const bool validation) noexcept { return VK_SUCCESS; }
-
-VkResult Application::SelectPhysicalDevice() noexcept {
+void Application::SelectPhysicalDevice() {
   const std::vector<vk::PhysicalDevice> physicalDevices{mInstance->enumeratePhysicalDevices()};
   const size_t physicalDeviceCount{physicalDevices.size()};
 
@@ -479,16 +683,14 @@ VkResult Application::SelectPhysicalDevice() noexcept {
 
   if (bestScore == 0) {
     Log::Fatal("[SelectPhysicalDevice] No physical device was found that meets requirements!");
-    return VK_ERROR_INCOMPATIBLE_DRIVER;
+    throw vk::IncompatibleDriverError("No physical device was found that meets requirements!");
   }
 
   mPhysicalDevice = physicalDevices[bestDevice];
   mDeviceInfo = deviceInfos[bestDevice];
-
-  return VK_SUCCESS;
 }
 
-VkResult Application::CreateDevice() noexcept {
+void Application::CreateDevice() {
   std::set<uint32_t> queueIndices{mDeviceInfo.GraphicsIndex.value(),
                                   mDeviceInfo.PresentIndex.value(),
                                   mDeviceInfo.TransferIndex.value()};
@@ -520,8 +722,6 @@ VkResult Application::CreateDevice() noexcept {
   }
 
   mDevice = mPhysicalDevice.createDeviceUnique(deviceCI);
-
-  return VK_SUCCESS;
 }
 
 void Application::GetQueues() noexcept {
@@ -569,7 +769,7 @@ void Application::GetQueues() noexcept {
   //}
 }
 
-VkResult Application::CreateSwapchain() noexcept {
+void Application::CreateSwapchain() {
   mSwapchain.ImageCount = std::min(mDeviceInfo.SurfaceCapabilities.minImageCount + 1,
                                    mDeviceInfo.SurfaceCapabilities.maxImageCount);
   mSwapchain.Extent = vk::Extent2D(mWindow->Width(), mWindow->Height());
@@ -643,131 +843,16 @@ VkResult Application::CreateSwapchain() noexcept {
       {}, *mSwapchain.DepthImage, vk::ImageViewType::e2D, depthCI.format, {},
       vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eDepth, 0, 1, 0, 1));
   mSwapchain.DepthImageView = mDevice->createImageViewUnique(depthViewCI);
-
-  return VK_SUCCESS;
 }
 
 void Application::DestroySwapchain() noexcept {
   for (auto& iv : mSwapchain.ImageViews) {
     iv.reset();
   }
+  mSwapchain.DepthImageView.reset();
+  mSwapchain.DepthMemory.reset();
+  mSwapchain.DepthImage.reset();
   mSwapchain.Swapchain.reset();
-}
-
-void Application::Render() {
-  mDevice->waitForFences(*mRenderFence, true, std::numeric_limits<uint64_t>::max());
-  mDevice->resetFences(*mRenderFence);
-
-  uint32_t imageIndex{mDevice->acquireNextImageKHR(
-      *mSwapchain.Swapchain, std::numeric_limits<uint64_t>::max(), *mPresentSemaphore)};
-
-  const vk::UniqueCommandBuffer& cmd{mGraphicsBuffers[imageIndex]};
-
-  const vk::CommandBufferBeginInfo beginInfo;
-  cmd->begin(beginInfo);
-
-  const std::array<float, 4> clearColor{0.0f, 0.0f, 1.0f, 1.0f};
-  const std::vector<vk::ClearValue> clearValues{vk::ClearColorValue(clearColor),
-                                                vk::ClearDepthStencilValue(1.0f, 0)};
-  const vk::RenderPassBeginInfo rpInfo(*mRenderPass, *mSwapchain.Framebuffers[imageIndex],
-                                       {{0, 0}, mSwapchain.Extent}, clearValues);
-  cmd->beginRenderPass(rpInfo, vk::SubpassContents::eInline);
-
-  cmd->bindPipeline(vk::PipelineBindPoint::eGraphics, *mBgPipeline);
-  cmd->draw(3, 1, 0, 0);
-
-  cmd->bindPipeline(vk::PipelineBindPoint::eGraphics, *mTriPipeline);
-  const GlobalConstantBuffer globalCB{
-      (glm::perspective(glm::radians(70.0f),
-                        static_cast<float>(mSwapchain.Extent.width) /
-                            static_cast<float>(mSwapchain.Extent.height),
-                        0.1f, 1000.0f) *
-       glm::lookAt(glm::vec3(0, 0, -3), glm::vec3(0, 0, 0), glm::vec3(0, 1, 0))) *
-      (glm::rotate(glm::mat4(1.0f), glm::radians(180.0f), glm::vec3(0, 1, 0)) *
-       glm::rotate(glm::mat4(1.0f), glm::radians(180.0f), glm::vec3(0, 0, 1)))};
-  cmd->pushConstants<GlobalConstantBuffer>(*mTriPipelineLayout, vk::ShaderStageFlagBits::eVertex, 0,
-                                           globalCB);
-  for (const auto& mesh : mMeshes) {
-    // Not declaring this as its own vector makes CL panic and die.
-    const std::vector<vk::DeviceSize> offset{0};
-    cmd->bindVertexBuffers(0, *(mesh->VertexBuffer.Handle), offset);
-    cmd->draw(mesh->VertexCount, 1, 0, 0);
-  }
-
-  cmd->endRenderPass();
-
-  cmd->end();
-
-  const std::vector<vk::Semaphore> waitSemaphores{*mPresentSemaphore};
-  const std::vector<vk::Semaphore> signalSemaphores{*mRenderSemaphore};
-  const std::vector<vk::PipelineStageFlags> waitStages{
-      vk::PipelineStageFlagBits::eColorAttachmentOutput};
-  const std::vector<vk::CommandBuffer> cmdBuffers{*cmd};
-  const vk::SubmitInfo submitInfo(waitSemaphores, waitStages, cmdBuffers, signalSemaphores);
-  mGraphicsQueue.submit(submitInfo, *mRenderFence);
-
-  const vk::PresentInfoKHR presentInfo(signalSemaphores, *mSwapchain.Swapchain, imageIndex);
-  mGraphicsQueue.presentKHR(presentInfo);
-}
-
-Model Application::LoadModel(const std::string& path) {
-  Model mdl;
-  tinygltf::Model model;
-  tinygltf::TinyGLTF loader;
-  std::string err;
-  std::string warn;
-
-  bool ret = loader.LoadASCIIFromFile(&model, &err, &warn, path.c_str());
-
-  if (!warn.empty()) {
-    Log::Warn("Warn: %s\n", warn.c_str());
-  }
-
-  if (!err.empty()) {
-    Log::Error("Err: %s\n", err.c_str());
-  }
-
-  if (!ret) {
-    Log::Error("Failed to parse glTF model {}", path);
-  }
-
-  mdl.mNodes.resize(model.nodes.size());
-  mdl.mMeshes.resize(model.meshes.size());
-  mdl.mTextures.resize(model.textures.size());
-
-  for (size_t i = 0; i < model.meshes.size(); i++) {
-    const auto& m{model.meshes[i]};
-    Mesh& mesh{mdl.mMeshes[i]};
-    mesh.SubMeshes.resize(m.primitives.size());
-
-    for (size_t j = 0; j < m.primitives.size(); j++) {
-      const auto& p{m.primitives[j]};
-      SubMesh& submesh{mesh.SubMeshes[j]};
-
-      const tinygltf::Accessor& pos{model.accessors[p.attributes.find("POSITION")->second]};
-      const tinygltf::BufferView& posBufView{model.bufferViews[pos.bufferView]};
-      const tinygltf::Buffer& posBuf = model.buffers[posBufView.buffer];
-      const float* positions =
-          reinterpret_cast<const float*>(&posBuf.data[posBufView.byteOffset + pos.byteOffset]);
-
-      const tinygltf::Accessor& norm{model.accessors[p.attributes.find("NORMAL")->second]};
-      const tinygltf::BufferView& normalBufView{model.bufferViews[norm.bufferView]};
-      const tinygltf::Buffer& normalBuf = model.buffers[normalBufView.buffer];
-      const float* normals = reinterpret_cast<const float*>(
-          &normalBuf.data[normalBufView.byteOffset + norm.byteOffset]);
-
-      std::vector<Vertex> vertices(pos.count);
-      for (size_t i = 0; i < pos.count; i++) {
-        vertices.push_back(
-            Vertex{glm::vec3{positions[i * 3 + 0], positions[i * 3 + 1], positions[i * 3 + 2]},
-                   glm::vec3{normals[i * 3 + 0], normals[i * 3 + 1], normals[i * 3 + 2]}});
-      }
-
-      submesh.VertexBuffer = std::move(CreateVertexBuffer(vertices));
-    }
-  }
-
-  return mdl;
 }
 
 void Application::CreateRenderPass() {
@@ -810,17 +895,9 @@ void Application::CreateFramebuffers() {
 void Application::CreatePipeline() {
   auto bgVertShader{CreateShaderModule("../Shaders/Basic.vert.glsl.spv")};
   auto bgFragShader{CreateShaderModule("../Shaders/Basic.frag.glsl.spv")};
-  auto triVertShader{CreateShaderModule("../Shaders/Tri.vert.spv")};
-  auto triFragShader{CreateShaderModule("../Shaders/Tri.frag.spv")};
 
   const vk::PipelineLayoutCreateInfo pipelineLayoutCI;
   mPipelineLayout = mDevice->createPipelineLayoutUnique(pipelineLayoutCI);
-
-  const std::vector<vk::DescriptorSetLayout> triSetLayouts;
-  const std::vector<vk::PushConstantRange> constants{
-      vk::PushConstantRange(vk::ShaderStageFlagBits::eVertex, 0, sizeof(GlobalConstantBuffer))};
-  const vk::PipelineLayoutCreateInfo triPipelineLayoutCI({}, triSetLayouts, constants);
-  mTriPipelineLayout = mDevice->createPipelineLayoutUnique(triPipelineLayoutCI);
 
   PipelineBuilder builder(mSwapchain.Extent);
   builder.Layout = *mPipelineLayout;
@@ -828,26 +905,6 @@ void Application::CreatePipeline() {
   builder.AddShader(vk::ShaderStageFlagBits::eVertex, *bgVertShader)
       .AddShader(vk::ShaderStageFlagBits::eFragment, *bgFragShader);
   mBgPipeline = mDevice->createGraphicsPipelineUnique({}, builder);
-
-  builder.Layout = *mTriPipelineLayout;
-  builder.ClearShaders()
-      .AddShader(vk::ShaderStageFlagBits::eVertex, *triVertShader)
-      .AddShader(vk::ShaderStageFlagBits::eFragment, *triFragShader);
-
-  const std::vector<vk::VertexInputBindingDescription> triBindingDesc{
-      vk::VertexInputBindingDescription(0, sizeof(Vertex), vk::VertexInputRate::eVertex)};
-  const std::vector<vk::VertexInputAttributeDescription> triAttributeDesc{
-      vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32B32Sfloat,
-                                          offsetof(Vertex, Position)),
-      vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32B32Sfloat,
-                                          offsetof(Vertex, Normal))};
-
-  builder.VertexInput =
-      vk::PipelineVertexInputStateCreateInfo({}, triBindingDesc, triAttributeDesc);
-  builder.DepthStencil = vk::PipelineDepthStencilStateCreateInfo(
-      {}, true, true, vk::CompareOp::eLessOrEqual, false, false, {}, {}, 0.0f, 1.0f);
-
-  mTriPipeline = mDevice->createGraphicsPipelineUnique({}, builder);
 }
 
 void Application::CreateCommandPools() {
@@ -871,17 +928,11 @@ void Application::CreateSyncObjects() {
   mRenderFence = mDevice->createFenceUnique(fenceCI);
 }
 
-void Application::CreateScene() {
-  const std::vector<Vertex> triVertices{Vertex{glm::vec3{1.0f, -1.0f, 0.0f}},
-                                        Vertex{glm::vec3{-1.0f, -1.0f, 0.0f}},
-                                        Vertex{glm::vec3{0.0f, 1.0f, 0.0f}}};
-  Buffer triBuffer{CreateVertexBuffer(triVertices)};
-  std::shared_ptr<Mesh> tri{std::make_shared<Mesh>(std::move(triBuffer), 3)};
-  mMeshes.push_back(tri);
+void Application::CreateScene() {}
 
-  auto suzanne{LoadMesh("../Assets/Models/Suzanne.gltf")};
-  mMeshes.push_back(suzanne);
-}
+/* ==========================================================================================
+ * Application Helper Methods
+ * ========================================================================================== */
 
 Buffer Application::CreateBuffer(const vk::DeviceSize size, vk::BufferUsageFlags usage,
                                  vk::MemoryPropertyFlags memoryType) {
@@ -901,18 +952,6 @@ Buffer Application::CreateBuffer(const vk::DeviceSize size, vk::BufferUsageFlags
   return Buffer(std::move(buffer), std::move(memory), require.size);
 }
 
-Buffer Application::CreateVertexBuffer(const std::vector<Vertex>& vertices) {
-  Buffer vBuf{CreateBuffer(
-      vertices.size() * sizeof(Vertex), vk::BufferUsageFlagBits::eVertexBuffer,
-      vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent)};
-
-  void* mem{mDevice->mapMemory(*vBuf.Memory, 0, vBuf.Size, {})};
-  memcpy(mem, vertices.data(), vBuf.Size);
-  mDevice->unmapMemory(*vBuf.Memory);
-
-  return vBuf;
-}
-
 uint32_t Application::FindMemoryType(uint32_t filter, vk::MemoryPropertyFlags properties) {
   for (uint32_t i = 0; i < mDeviceInfo.MemoryProperties.memoryTypeCount; i++) {
     if ((filter & (1 << i)) &&
@@ -922,68 +961,6 @@ uint32_t Application::FindMemoryType(uint32_t filter, vk::MemoryPropertyFlags pr
   }
 
   throw std::runtime_error("No memory type is available that meets requirements!");
-}
-
-vk::UniqueShaderModule Application::CreateShaderModule(const std::string& path) {
-  std::ifstream file(path, std::ios::ate | std::ios::binary);
-  const size_t fileSize{static_cast<size_t>(file.tellg())};
-  std::vector<char> buffer(fileSize);
-  file.seekg(0);
-  file.read(buffer.data(), fileSize);
-  file.close();
-
-  const vk::ShaderModuleCreateInfo shaderModuleCI({}, fileSize,
-                                                  reinterpret_cast<uint32_t*>(buffer.data()));
-  return mDevice->createShaderModuleUnique(shaderModuleCI);
-}
-
-std::shared_ptr<Mesh> Application::LoadMesh(const std::string& path) {
-  tinygltf::Model model;
-  tinygltf::TinyGLTF loader;
-  std::string err;
-  std::string warn;
-
-  bool ret = loader.LoadASCIIFromFile(&model, &err, &warn, path.c_str());
-
-  if (!warn.empty()) {
-    Log::Warn("Warn: %s\n", warn.c_str());
-  }
-
-  if (!err.empty()) {
-    Log::Error("Err: %s\n", err.c_str());
-  }
-
-  if (!ret) {
-    Log::Error("Failed to parse glTF model {}", path);
-    return nullptr;
-  }
-
-  std::vector<Vertex> vertices;
-  for (const auto& m : model.meshes) {
-    for (const auto& p : m.primitives) {
-      const tinygltf::Accessor& pos{model.accessors[p.attributes.find("POSITION")->second]};
-      const tinygltf::BufferView& posBufView{model.bufferViews[pos.bufferView]};
-      const tinygltf::Buffer& posBuf = model.buffers[posBufView.buffer];
-      const float* positions =
-          reinterpret_cast<const float*>(&posBuf.data[posBufView.byteOffset + pos.byteOffset]);
-
-      const tinygltf::Accessor& norm{model.accessors[p.attributes.find("NORMAL")->second]};
-      const tinygltf::BufferView& normalBufView{model.bufferViews[norm.bufferView]};
-      const tinygltf::Buffer& normalBuf = model.buffers[normalBufView.buffer];
-      const float* normals = reinterpret_cast<const float*>(
-          &normalBuf.data[normalBufView.byteOffset + norm.byteOffset]);
-
-      for (size_t i = 0; i < pos.count; i++) {
-        vertices.push_back(
-            Vertex{glm::vec3{positions[i * 3 + 0], positions[i * 3 + 1], positions[i * 3 + 2]},
-                   glm::vec3{normals[i * 3 + 0], normals[i * 3 + 1], normals[i * 3 + 2]}});
-      }
-    }
-  }
-
-  Buffer buffer{CreateVertexBuffer(vertices)};
-
-  return std::make_shared<Mesh>(std::move(buffer), vertices.size());
 }
 
 vk::Format Application::FindFormat(const std::vector<vk::Format>& candidates,
@@ -1002,6 +979,23 @@ vk::Format Application::FindFormat(const std::vector<vk::Format>& candidates,
       "No format could be found that supports the required features!");
 }
 
+vk::UniqueShaderModule Application::CreateShaderModule(const std::string& path) {
+  std::ifstream file(path, std::ios::ate | std::ios::binary);
+  const size_t fileSize{static_cast<size_t>(file.tellg())};
+  std::vector<char> buffer(fileSize);
+  file.seekg(0);
+  file.read(buffer.data(), fileSize);
+  file.close();
+
+  const vk::ShaderModuleCreateInfo shaderModuleCI({}, fileSize,
+                                                  reinterpret_cast<uint32_t*>(buffer.data()));
+  return mDevice->createShaderModuleUnique(shaderModuleCI);
+}
+
+/* ==========================================================================================
+ * Helper Class Methods
+ * ========================================================================================== */
+
 Buffer::Buffer(vk::UniqueBuffer buffer, vk::UniqueDeviceMemory memory, vk::DeviceSize size)
     : Handle(std::move(buffer)), Memory(std::move(memory)), Size(size) {}
 
@@ -1011,59 +1005,13 @@ Buffer::Buffer(Buffer&& o) {
   Size = o.Size;
 }
 
+Buffer& Buffer::operator=(Buffer&& o) {
+  Handle = std::move(o.Handle);
+  Memory = std::move(o.Memory);
+  Size = o.Size;
+
+  return *this;
+}
+
 Buffer::~Buffer() {}
-
-Mesh::Mesh(Buffer buffer, uint64_t vertices)
-    : VertexBuffer(std::move(buffer)), VertexCount(vertices) {}
-
-Mesh::~Mesh() {}
-
-PipelineBuilder::PipelineBuilder(vk::Extent2D extent) {
-  InputAssembly =
-      vk::PipelineInputAssemblyStateCreateInfo({}, vk::PrimitiveTopology::eTriangleList, false);
-
-  Viewport = vk::Viewport(0, 0, extent.width, extent.height, 0.0f, 1.0f);
-  Scissor = vk::Rect2D({0, 0}, extent);
-
-  Rasterizer = vk::PipelineRasterizationStateCreateInfo(
-      {}, false, false, vk::PolygonMode::eFill, vk::CullModeFlagBits::eNone,
-      vk::FrontFace::eCounterClockwise, false, 0.0f, 0.0f, 0.0f, 1.0f);
-
-  Multisampling = vk::PipelineMultisampleStateCreateInfo();
-
-  DepthStencil = vk::PipelineDepthStencilStateCreateInfo();
-
-  ColorAttachment = vk::PipelineColorBlendAttachmentState(
-      true, vk::BlendFactor::eSrcAlpha, vk::BlendFactor::eOneMinusSrcAlpha, vk::BlendOp::eAdd,
-      vk::BlendFactor::eOne, vk::BlendFactor::eZero, vk::BlendOp::eAdd,
-      vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
-          vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA);
-  ColorBlending =
-      vk::PipelineColorBlendStateCreateInfo({}, false, vk::LogicOp::eCopy, ColorAttachment);
-}
-
-PipelineBuilder::operator vk::GraphicsPipelineCreateInfo() {
-  ViewportState = vk::PipelineViewportStateCreateInfo({}, Viewport, Scissor);
-
-  return vk::GraphicsPipelineCreateInfo({}, ShaderStages, &VertexInput, &InputAssembly,
-                                        &Tesselation, &ViewportState, &Rasterizer, &Multisampling,
-                                        &DepthStencil, &ColorBlending, {}, Layout, RenderPass, 0);
-}
-
-PipelineBuilder& PipelineBuilder::AddShader(vk::ShaderStageFlagBits stage,
-                                            vk::ShaderModule& shader) {
-  ShaderStages.push_back(vk::PipelineShaderStageCreateInfo({}, stage, shader, "main"));
-
-  return *this;
-}
-
-PipelineBuilder& PipelineBuilder::ClearShaders() {
-  ShaderStages.clear();
-
-  return *this;
-}
-
-Model Model::LoadFromGLTF(const std::string& path) {
-
-}
 }  // namespace Raven
