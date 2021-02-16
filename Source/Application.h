@@ -15,8 +15,12 @@ struct GlobalConstantBuffer {
 };
 
 struct Vertex {
+ public:
   glm::vec3 Position;
   glm::vec3 Normal;
+
+  const static std::vector<vk::VertexInputBindingDescription> Bindings;
+  const static std::vector<vk::VertexInputAttributeDescription> Attributes;
 };
 
 class Buffer {
@@ -31,13 +35,62 @@ class Buffer {
   vk::DeviceSize Size;
 };
 
-struct Mesh {
-  Buffer VertexBuffer;
-  uint64_t VertexCount;
+class Texture final {};
 
-  Mesh(Buffer buffer, uint64_t vertices);
-  Mesh(const Mesh&) = delete;
-  ~Mesh();
+struct SubMesh final {
+  uint32_t IndexCount;
+  Buffer VertexBuffer;
+  Buffer IndexBuffer;
+};
+
+struct Mesh final {
+  std::vector<SubMesh> SubMeshes;
+};
+
+struct Node final {
+  uint32_t Mesh;
+  glm::mat4 Transform;
+};
+
+struct Model final {
+  void Draw(vk::CommandBuffer& cmd);
+
+  std::vector<Node> mNodes;
+  std::vector<Mesh> mMeshes;
+  std::vector<Texture> mTextures;
+};
+
+//struct Mesh {
+//  Buffer VertexBuffer;
+//  uint64_t VertexCount;
+//
+//  Mesh(Buffer buffer, uint64_t vertices);
+//  Mesh(const Mesh&) = delete;
+//  ~Mesh();
+//};
+
+class PipelineBuilder final {
+ public:
+  PipelineBuilder(vk::Extent2D extent);
+  operator vk::GraphicsPipelineCreateInfo();
+
+  PipelineBuilder& AddShader(vk::ShaderStageFlagBits stage, vk::ShaderModule& shader);
+  PipelineBuilder& ClearShaders();
+
+  std::vector<vk::PipelineShaderStageCreateInfo> ShaderStages;
+  vk::PipelineVertexInputStateCreateInfo VertexInput;
+  vk::PipelineInputAssemblyStateCreateInfo InputAssembly;
+  vk::PipelineTessellationStateCreateInfo Tesselation;
+  vk::Viewport Viewport;
+  vk::Rect2D Scissor;
+  vk::PipelineViewportStateCreateInfo ViewportState;
+  vk::PipelineRasterizationStateCreateInfo Rasterizer;
+  vk::PipelineMultisampleStateCreateInfo Multisampling;
+  vk::PipelineDepthStencilStateCreateInfo DepthStencil;
+  vk::PipelineColorBlendAttachmentState ColorAttachment;
+  vk::PipelineColorBlendStateCreateInfo ColorBlending;
+  vk::PipelineLayout Layout;
+  vk::RenderPass RenderPass;
 };
 
 class InstanceBuilder final {
@@ -143,6 +196,10 @@ struct VulkanSwapchain final {
   std::vector<vk::Image> Images;
   std::vector<vk::UniqueImageView> ImageViews;
   std::vector<vk::UniqueFramebuffer> Framebuffers;
+  vk::Format DepthFormat;
+  vk::UniqueImage DepthImage;
+  vk::UniqueDeviceMemory DepthMemory;
+  vk::UniqueImageView DepthImageView;
 };
 
 struct QueueFamilyInfo final {
@@ -207,7 +264,10 @@ class Application final {
   Buffer CreateBuffer(const vk::DeviceSize size, vk::BufferUsageFlags usage,
                       vk::MemoryPropertyFlags memoryType);
   Buffer CreateVertexBuffer(const std::vector<Vertex>& vertices);
+  Model LoadModel(const std::string& path);
   uint32_t FindMemoryType(uint32_t filter, vk::MemoryPropertyFlags properties);
+  vk::Format FindFormat(const std::vector<vk::Format>& candidates, vk::ImageTiling tiling,
+                        vk::FormatFeatureFlags features);
   vk::UniqueShaderModule CreateShaderModule(const std::string& path);
   std::shared_ptr<Mesh> LoadMesh(const std::string& path);
 

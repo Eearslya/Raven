@@ -16,6 +16,16 @@
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
 namespace Raven {
+const std::vector<vk::VertexInputBindingDescription> Vertex::Bindings =
+    std::vector<vk::VertexInputBindingDescription>{
+        vk::VertexInputBindingDescription(0, sizeof(Vertex), vk::VertexInputRate::eVertex)};
+const std::vector<vk::VertexInputAttributeDescription> Vertex::Attributes =
+    std::vector<vk::VertexInputAttributeDescription>{
+        vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32B32Sfloat,
+                                            offsetof(Vertex, Position)),
+        vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32B32Sfloat,
+                                            offsetof(Vertex, Normal))};
+
 VkBool32 VulkanDebugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
                              VkDebugUtilsMessageTypeFlagsEXT messageTypes,
                              const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
@@ -191,7 +201,6 @@ void Application::InitializeVulkan() {
   VkCall(CreateDevice());
   Log::Debug("[InitializeVulkan] Vulkan Device created. <{}>", static_cast<void*>(*mDevice));
   VULKAN_HPP_DEFAULT_DISPATCHER.init(*mDevice);
-  // SetObjectName(VK_OBJECT_TYPE_DEVICE, mDevice, "Main Device");
 
   GetQueues();
   Log::Debug("[InitializeVulkan] Device queues retrieved.");
@@ -563,13 +572,15 @@ void Application::GetQueues() noexcept {
 VkResult Application::CreateSwapchain() noexcept {
   mSwapchain.ImageCount = std::min(mDeviceInfo.SurfaceCapabilities.minImageCount + 1,
                                    mDeviceInfo.SurfaceCapabilities.maxImageCount);
-  mSwapchain.Extent = vk::Extent2D(1600, 900);
+  mSwapchain.Extent = vk::Extent2D(mWindow->Width(), mWindow->Height());
+
   vk::SharingMode sharing{vk::SharingMode::eExclusive};
   std::vector<uint32_t> queues{mDeviceInfo.GraphicsIndex.value()};
   if (mDeviceInfo.GraphicsIndex != mDeviceInfo.PresentIndex) {
     sharing = vk::SharingMode::eConcurrent;
     queues.push_back(mDeviceInfo.PresentIndex.value());
   }
+
   vk::SurfaceTransformFlagBitsKHR preTransform;
   if (mDeviceInfo.SurfaceCapabilities.supportedTransforms &
       vk::SurfaceTransformFlagBitsKHR::eIdentity) {
@@ -577,6 +588,7 @@ VkResult Application::CreateSwapchain() noexcept {
   } else {
     preTransform = mDeviceInfo.SurfaceCapabilities.currentTransform;
   }
+
   vk::CompositeAlphaFlagBitsKHR compositeAlpha{vk::CompositeAlphaFlagBitsKHR::eOpaque};
   constexpr const vk::CompositeAlphaFlagBitsKHR compositeAlphas[]{
       vk::CompositeAlphaFlagBitsKHR::eOpaque, vk::CompositeAlphaFlagBitsKHR::ePreMultiplied,
@@ -596,23 +608,41 @@ VkResult Application::CreateSwapchain() noexcept {
 
   mSwapchain.Swapchain = mDevice->createSwapchainKHRUnique(swapchainCI);
 
-  // SetObjectName(VK_OBJECT_TYPE_SWAPCHAIN_KHR, mSwapchain.Swapchain, "Main Swapchain");
-
   mSwapchain.Images = mDevice->getSwapchainImagesKHR(*mSwapchain.Swapchain);
   mSwapchain.ImageViews.resize(mSwapchain.Images.size());
 
   for (size_t i = 0; i < mSwapchain.Images.size(); i++) {
-    // SetObjectName(VK_OBJECT_TYPE_IMAGE, mSwapchain.Images[i],
-    //              fmt::format("Swapchain Image {}", i).c_str());
-
     const vk::ImageViewCreateInfo imageViewCI(
         {}, mSwapchain.Images[i], vk::ImageViewType::e2D, swapchainCI.imageFormat, {},
         vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
     mSwapchain.ImageViews[i] = mDevice->createImageViewUnique(imageViewCI);
-
-    // SetObjectName(VK_OBJECT_TYPE_IMAGE_VIEW, mSwapchain.ImageViews[i],
-    //              fmt::format("Swapchain Image View {}", i).c_str());
   }
+
+  const std::vector<vk::Format> depthFormats{vk::Format::eD32Sfloat, vk::Format::eD32SfloatS8Uint,
+                                             vk::Format::eD24UnormS8Uint};
+  mSwapchain.DepthFormat = FindFormat(depthFormats, vk::ImageTiling::eOptimal,
+                                      vk::FormatFeatureFlagBits::eDepthStencilAttachment);
+
+  const vk::ImageCreateInfo depthCI(
+      {}, vk::ImageType::e2D, mSwapchain.DepthFormat, vk::Extent3D(mSwapchain.Extent, 1), 1, 1,
+      vk::SampleCountFlagBits::e1, vk::ImageTiling::eOptimal,
+      vk::ImageUsageFlagBits::eDepthStencilAttachment, sharing, queues);
+  mSwapchain.DepthImage = mDevice->createImageUnique(depthCI);
+
+  const vk::MemoryRequirements depthReq{
+      mDevice->getImageMemoryRequirements(*mSwapchain.DepthImage)};
+  const uint32_t memType{
+      FindMemoryType(depthReq.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal)};
+
+  const vk::MemoryAllocateInfo memoryAI(depthReq.size, memType);
+  mSwapchain.DepthMemory = mDevice->allocateMemoryUnique(memoryAI);
+
+  mDevice->bindImageMemory(*mSwapchain.DepthImage, *mSwapchain.DepthMemory, 0);
+
+  const vk::ImageViewCreateInfo depthViewCI(
+      {}, *mSwapchain.DepthImage, vk::ImageViewType::e2D, depthCI.format, {},
+      vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eDepth, 0, 1, 0, 1));
+  mSwapchain.DepthImageView = mDevice->createImageViewUnique(depthViewCI);
 
   return VK_SUCCESS;
 }
@@ -637,9 +667,10 @@ void Application::Render() {
   cmd->begin(beginInfo);
 
   const std::array<float, 4> clearColor{0.0f, 0.0f, 1.0f, 1.0f};
-  const std::vector<vk::ClearValue> clearValues{vk::ClearColorValue(clearColor)};
+  const std::vector<vk::ClearValue> clearValues{vk::ClearColorValue(clearColor),
+                                                vk::ClearDepthStencilValue(1.0f, 0)};
   const vk::RenderPassBeginInfo rpInfo(*mRenderPass, *mSwapchain.Framebuffers[imageIndex],
-                                       {{0, 0}, {1600, 900}}, clearValues);
+                                       {{0, 0}, mSwapchain.Extent}, clearValues);
   cmd->beginRenderPass(rpInfo, vk::SubpassContents::eInline);
 
   cmd->bindPipeline(vk::PipelineBindPoint::eGraphics, *mBgPipeline);
@@ -647,8 +678,13 @@ void Application::Render() {
 
   cmd->bindPipeline(vk::PipelineBindPoint::eGraphics, *mTriPipeline);
   const GlobalConstantBuffer globalCB{
-      glm::perspective(glm::radians(70.0f), 16.0f / 9.0f, 0.1f, 1000.0f) *
-      glm::lookAt(glm::vec3(0, 0, -2), glm::vec3(0, 0, 0), glm::vec3(0, 1, 0))};
+      (glm::perspective(glm::radians(70.0f),
+                        static_cast<float>(mSwapchain.Extent.width) /
+                            static_cast<float>(mSwapchain.Extent.height),
+                        0.1f, 1000.0f) *
+       glm::lookAt(glm::vec3(0, 0, -3), glm::vec3(0, 0, 0), glm::vec3(0, 1, 0))) *
+      (glm::rotate(glm::mat4(1.0f), glm::radians(180.0f), glm::vec3(0, 1, 0)) *
+       glm::rotate(glm::mat4(1.0f), glm::radians(180.0f), glm::vec3(0, 0, 1)))};
   cmd->pushConstants<GlobalConstantBuffer>(*mTriPipelineLayout, vk::ShaderStageFlagBits::eVertex, 0,
                                            globalCB);
   for (const auto& mesh : mMeshes) {
@@ -674,18 +710,86 @@ void Application::Render() {
   mGraphicsQueue.presentKHR(presentInfo);
 }
 
+Model Application::LoadModel(const std::string& path) {
+  Model mdl;
+  tinygltf::Model model;
+  tinygltf::TinyGLTF loader;
+  std::string err;
+  std::string warn;
+
+  bool ret = loader.LoadASCIIFromFile(&model, &err, &warn, path.c_str());
+
+  if (!warn.empty()) {
+    Log::Warn("Warn: %s\n", warn.c_str());
+  }
+
+  if (!err.empty()) {
+    Log::Error("Err: %s\n", err.c_str());
+  }
+
+  if (!ret) {
+    Log::Error("Failed to parse glTF model {}", path);
+  }
+
+  mdl.mNodes.resize(model.nodes.size());
+  mdl.mMeshes.resize(model.meshes.size());
+  mdl.mTextures.resize(model.textures.size());
+
+  for (size_t i = 0; i < model.meshes.size(); i++) {
+    const auto& m{model.meshes[i]};
+    Mesh& mesh{mdl.mMeshes[i]};
+    mesh.SubMeshes.resize(m.primitives.size());
+
+    for (size_t j = 0; j < m.primitives.size(); j++) {
+      const auto& p{m.primitives[j]};
+      SubMesh& submesh{mesh.SubMeshes[j]};
+
+      const tinygltf::Accessor& pos{model.accessors[p.attributes.find("POSITION")->second]};
+      const tinygltf::BufferView& posBufView{model.bufferViews[pos.bufferView]};
+      const tinygltf::Buffer& posBuf = model.buffers[posBufView.buffer];
+      const float* positions =
+          reinterpret_cast<const float*>(&posBuf.data[posBufView.byteOffset + pos.byteOffset]);
+
+      const tinygltf::Accessor& norm{model.accessors[p.attributes.find("NORMAL")->second]};
+      const tinygltf::BufferView& normalBufView{model.bufferViews[norm.bufferView]};
+      const tinygltf::Buffer& normalBuf = model.buffers[normalBufView.buffer];
+      const float* normals = reinterpret_cast<const float*>(
+          &normalBuf.data[normalBufView.byteOffset + norm.byteOffset]);
+
+      std::vector<Vertex> vertices(pos.count);
+      for (size_t i = 0; i < pos.count; i++) {
+        vertices.push_back(
+            Vertex{glm::vec3{positions[i * 3 + 0], positions[i * 3 + 1], positions[i * 3 + 2]},
+                   glm::vec3{normals[i * 3 + 0], normals[i * 3 + 1], normals[i * 3 + 2]}});
+      }
+
+      submesh.VertexBuffer = std::move(CreateVertexBuffer(vertices));
+    }
+  }
+
+  return mdl;
+}
+
 void Application::CreateRenderPass() {
   const vk::AttachmentDescription colorAttachment(
       {}, mDeviceInfo.OptimalSwapchainFormat.format, vk::SampleCountFlagBits::e1,
       vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore, vk::AttachmentLoadOp::eDontCare,
       vk::AttachmentStoreOp::eDontCare, vk::ImageLayout::eUndefined,
       vk::ImageLayout::ePresentSrcKHR);
-  const std::vector<vk::AttachmentDescription> attachments{colorAttachment};
+  const vk::AttachmentDescription depthAttachment(
+      {}, mSwapchain.DepthFormat, vk::SampleCountFlagBits::e1, vk::AttachmentLoadOp::eClear,
+      vk::AttachmentStoreOp::eDontCare, vk::AttachmentLoadOp::eDontCare,
+      vk::AttachmentStoreOp::eDontCare, vk::ImageLayout::eUndefined,
+      vk::ImageLayout::eDepthStencilAttachmentOptimal);
+  const std::vector<vk::AttachmentDescription> attachments{colorAttachment, depthAttachment};
 
   const vk::AttachmentReference colorAttachmentRef(0, vk::ImageLayout::eColorAttachmentOptimal);
-  const std::vector<vk::AttachmentReference> attachmentRefs{colorAttachmentRef};
+  const vk::AttachmentReference depthAttachmentRef(1,
+                                                   vk::ImageLayout::eDepthStencilAttachmentOptimal);
+  const std::vector<vk::AttachmentReference> colorAttachmentRefs{colorAttachmentRef};
 
-  const vk::SubpassDescription subpass({}, vk::PipelineBindPoint::eGraphics, {}, attachmentRefs);
+  const vk::SubpassDescription subpass({}, vk::PipelineBindPoint::eGraphics, {},
+                                       colorAttachmentRefs, {}, &depthAttachmentRef);
   const std::vector<vk::SubpassDescription> subpasses{subpass};
 
   const vk::RenderPassCreateInfo renderPassCI({}, attachments, subpasses);
@@ -695,7 +799,8 @@ void Application::CreateRenderPass() {
 void Application::CreateFramebuffers() {
   mSwapchain.Framebuffers.resize(mSwapchain.ImageCount);
   for (uint32_t i = 0; i < mSwapchain.ImageCount; i++) {
-    const std::vector<vk::ImageView> attachments{*mSwapchain.ImageViews[i]};
+    const std::vector<vk::ImageView> attachments{*mSwapchain.ImageViews[i],
+                                                 *mSwapchain.DepthImageView};
     const vk::FramebufferCreateInfo framebufferCI(
         {}, *mRenderPass, attachments, mSwapchain.Extent.width, mSwapchain.Extent.height, 1);
     mSwapchain.Framebuffers[i] = mDevice->createFramebufferUnique(framebufferCI);
@@ -708,54 +813,6 @@ void Application::CreatePipeline() {
   auto triVertShader{CreateShaderModule("../Shaders/Tri.vert.spv")};
   auto triFragShader{CreateShaderModule("../Shaders/Tri.frag.spv")};
 
-  const vk::PipelineShaderStageCreateInfo bgVertStage({}, vk::ShaderStageFlagBits::eVertex,
-                                                      *bgVertShader, "main");
-  const vk::PipelineShaderStageCreateInfo bgFragStage({}, vk::ShaderStageFlagBits::eFragment,
-                                                      *bgFragShader, "main");
-  const std::vector<vk::PipelineShaderStageCreateInfo> bgStages{bgVertStage, bgFragStage};
-
-  const vk::PipelineShaderStageCreateInfo triVertStage({}, vk::ShaderStageFlagBits::eVertex,
-                                                       *triVertShader, "main");
-  const vk::PipelineShaderStageCreateInfo triFragStage({}, vk::ShaderStageFlagBits::eFragment,
-                                                       *triFragShader, "main");
-  const std::vector<vk::PipelineShaderStageCreateInfo> triStages{triVertStage, triFragStage};
-
-  const std::vector<vk::VertexInputBindingDescription> triBindingDesc{
-      vk::VertexInputBindingDescription(0, sizeof(Vertex), vk::VertexInputRate::eVertex)};
-  const std::vector<vk::VertexInputAttributeDescription> triAttributeDesc{
-      vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32B32Sfloat,
-                                          offsetof(Vertex, Position)),
-      vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32B32Sfloat,
-                                          offsetof(Vertex, Normal))};
-
-  const vk::PipelineVertexInputStateCreateInfo blankVertexInput;
-  const vk::PipelineVertexInputStateCreateInfo triVertexInput({}, triBindingDesc, triAttributeDesc);
-
-  const vk::PipelineInputAssemblyStateCreateInfo inputAssembly(
-      {}, vk::PrimitiveTopology::eTriangleList, false);
-
-  const vk::Viewport viewport(0, 0, 1600, 900, 0.0f, 1.0f);
-  const std::vector<vk::Viewport> viewports{viewport};
-  const vk::Rect2D scissor({0, 0}, {1600, 900});
-  const std::vector<vk::Rect2D> scissors{scissor};
-  const vk::PipelineViewportStateCreateInfo viewportState({}, viewports, scissors);
-
-  const vk::PipelineRasterizationStateCreateInfo rasterizer(
-      {}, false, false, vk::PolygonMode::eFill, vk::CullModeFlagBits::eNone,
-      vk::FrontFace::eCounterClockwise, false, 0.0f, 0.0f, 0.0f, 1.0f);
-
-  const vk::PipelineMultisampleStateCreateInfo multisampling;
-
-  const vk::PipelineColorBlendAttachmentState colorBlendAttachment(
-      true, vk::BlendFactor::eSrcAlpha, vk::BlendFactor::eOneMinusSrcAlpha, vk::BlendOp::eAdd,
-      vk::BlendFactor::eOne, vk::BlendFactor::eZero, vk::BlendOp::eAdd,
-      vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
-          vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA);
-  const std::vector<vk::PipelineColorBlendAttachmentState> colorBlendAttachments{
-      colorBlendAttachment};
-  const vk::PipelineColorBlendStateCreateInfo colorBlending({}, false, vk::LogicOp::eCopy,
-                                                            colorBlendAttachments);
-
   const vk::PipelineLayoutCreateInfo pipelineLayoutCI;
   mPipelineLayout = mDevice->createPipelineLayoutUnique(pipelineLayoutCI);
 
@@ -765,15 +822,32 @@ void Application::CreatePipeline() {
   const vk::PipelineLayoutCreateInfo triPipelineLayoutCI({}, triSetLayouts, constants);
   mTriPipelineLayout = mDevice->createPipelineLayoutUnique(triPipelineLayoutCI);
 
-  const vk::GraphicsPipelineCreateInfo pipelineCI(
-      {}, bgStages, &blankVertexInput, &inputAssembly, {}, &viewportState, &rasterizer,
-      &multisampling, {}, &colorBlending, {}, *mPipelineLayout, *mRenderPass, 0);
-  mBgPipeline = mDevice->createGraphicsPipelineUnique({}, pipelineCI);
+  PipelineBuilder builder(mSwapchain.Extent);
+  builder.Layout = *mPipelineLayout;
+  builder.RenderPass = *mRenderPass;
+  builder.AddShader(vk::ShaderStageFlagBits::eVertex, *bgVertShader)
+      .AddShader(vk::ShaderStageFlagBits::eFragment, *bgFragShader);
+  mBgPipeline = mDevice->createGraphicsPipelineUnique({}, builder);
 
-  const vk::GraphicsPipelineCreateInfo triPipelineCI(
-      {}, triStages, &triVertexInput, &inputAssembly, {}, &viewportState, &rasterizer,
-      &multisampling, {}, &colorBlending, {}, *mTriPipelineLayout, *mRenderPass, 0);
-  mTriPipeline = mDevice->createGraphicsPipelineUnique({}, triPipelineCI);
+  builder.Layout = *mTriPipelineLayout;
+  builder.ClearShaders()
+      .AddShader(vk::ShaderStageFlagBits::eVertex, *triVertShader)
+      .AddShader(vk::ShaderStageFlagBits::eFragment, *triFragShader);
+
+  const std::vector<vk::VertexInputBindingDescription> triBindingDesc{
+      vk::VertexInputBindingDescription(0, sizeof(Vertex), vk::VertexInputRate::eVertex)};
+  const std::vector<vk::VertexInputAttributeDescription> triAttributeDesc{
+      vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32B32Sfloat,
+                                          offsetof(Vertex, Position)),
+      vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32B32Sfloat,
+                                          offsetof(Vertex, Normal))};
+
+  builder.VertexInput =
+      vk::PipelineVertexInputStateCreateInfo({}, triBindingDesc, triAttributeDesc);
+  builder.DepthStencil = vk::PipelineDepthStencilStateCreateInfo(
+      {}, true, true, vk::CompareOp::eLessOrEqual, false, false, {}, {}, 0.0f, 1.0f);
+
+  mTriPipeline = mDevice->createGraphicsPipelineUnique({}, builder);
 }
 
 void Application::CreateCommandPools() {
@@ -912,6 +986,22 @@ std::shared_ptr<Mesh> Application::LoadMesh(const std::string& path) {
   return std::make_shared<Mesh>(std::move(buffer), vertices.size());
 }
 
+vk::Format Application::FindFormat(const std::vector<vk::Format>& candidates,
+                                   vk::ImageTiling tiling, vk::FormatFeatureFlags features) {
+  for (const vk::Format& fmt : candidates) {
+    const vk::FormatProperties props{mPhysicalDevice.getFormatProperties(fmt)};
+    if ((tiling == vk::ImageTiling::eLinear &&
+         (props.linearTilingFeatures & features) == features) ||
+        (tiling == vk::ImageTiling::eOptimal &&
+         (props.optimalTilingFeatures & features) == features)) {
+      return fmt;
+    }
+  }
+
+  throw vk::FormatNotSupportedError(
+      "No format could be found that supports the required features!");
+}
+
 Buffer::Buffer(vk::UniqueBuffer buffer, vk::UniqueDeviceMemory memory, vk::DeviceSize size)
     : Handle(std::move(buffer)), Memory(std::move(memory)), Size(size) {}
 
@@ -927,4 +1017,53 @@ Mesh::Mesh(Buffer buffer, uint64_t vertices)
     : VertexBuffer(std::move(buffer)), VertexCount(vertices) {}
 
 Mesh::~Mesh() {}
+
+PipelineBuilder::PipelineBuilder(vk::Extent2D extent) {
+  InputAssembly =
+      vk::PipelineInputAssemblyStateCreateInfo({}, vk::PrimitiveTopology::eTriangleList, false);
+
+  Viewport = vk::Viewport(0, 0, extent.width, extent.height, 0.0f, 1.0f);
+  Scissor = vk::Rect2D({0, 0}, extent);
+
+  Rasterizer = vk::PipelineRasterizationStateCreateInfo(
+      {}, false, false, vk::PolygonMode::eFill, vk::CullModeFlagBits::eNone,
+      vk::FrontFace::eCounterClockwise, false, 0.0f, 0.0f, 0.0f, 1.0f);
+
+  Multisampling = vk::PipelineMultisampleStateCreateInfo();
+
+  DepthStencil = vk::PipelineDepthStencilStateCreateInfo();
+
+  ColorAttachment = vk::PipelineColorBlendAttachmentState(
+      true, vk::BlendFactor::eSrcAlpha, vk::BlendFactor::eOneMinusSrcAlpha, vk::BlendOp::eAdd,
+      vk::BlendFactor::eOne, vk::BlendFactor::eZero, vk::BlendOp::eAdd,
+      vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+          vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA);
+  ColorBlending =
+      vk::PipelineColorBlendStateCreateInfo({}, false, vk::LogicOp::eCopy, ColorAttachment);
+}
+
+PipelineBuilder::operator vk::GraphicsPipelineCreateInfo() {
+  ViewportState = vk::PipelineViewportStateCreateInfo({}, Viewport, Scissor);
+
+  return vk::GraphicsPipelineCreateInfo({}, ShaderStages, &VertexInput, &InputAssembly,
+                                        &Tesselation, &ViewportState, &Rasterizer, &Multisampling,
+                                        &DepthStencil, &ColorBlending, {}, Layout, RenderPass, 0);
+}
+
+PipelineBuilder& PipelineBuilder::AddShader(vk::ShaderStageFlagBits stage,
+                                            vk::ShaderModule& shader) {
+  ShaderStages.push_back(vk::PipelineShaderStageCreateInfo({}, stage, shader, "main"));
+
+  return *this;
+}
+
+PipelineBuilder& PipelineBuilder::ClearShaders() {
+  ShaderStages.clear();
+
+  return *this;
+}
+
+Model Model::LoadFromGLTF(const std::string& path) {
+
+}
 }  // namespace Raven

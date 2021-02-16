@@ -23,6 +23,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 }
 
 Window::Window() {
+  mWidth = 1600;
+  mHeight = 900;
+
   const HINSTANCE inst{::GetModuleHandleA(nullptr)};
 
   if (!gWindowClassCreated) {
@@ -52,8 +55,8 @@ Window::Window() {
 
   const int screenW{::GetSystemMetrics(SM_CXSCREEN)};
   const int screenH{::GetSystemMetrics(SM_CYSCREEN)};
-  const int windowW{1600 + (windowRect.right - windowRect.left)};
-  const int windowH{900 + (windowRect.bottom - windowRect.top)};
+  const int windowW{static_cast<int>(mWidth) + static_cast<int>(windowRect.right - windowRect.left)};
+  const int windowH{static_cast<int>(mHeight) + static_cast<int>(windowRect.bottom - windowRect.top)};
   const int windowX{std::max((screenW - windowW) / 2, 0)};
   const int windowY{std::max((screenH - windowH) / 2, 0)};
 
@@ -87,6 +90,10 @@ bool Window::Update() noexcept {
 
   return true;
 }
+
+uint32_t Window::Width() const noexcept { return mWidth; }
+
+uint32_t Window::Height() const noexcept { return mHeight; }
 
 void Window::SetTitle(const std::string& title) noexcept {
   ::SetWindowTextA(mHandle, title.c_str());
