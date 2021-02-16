@@ -26,8 +26,13 @@ class Buffer {
 };
 
 struct GlobalPushConstants final {
-  glm::mat4 ViewProjection;
   glm::mat4 Model;
+};
+
+struct GlobalDescriptor_Camera {
+  glm::mat4 View;
+  glm::mat4 Projection;
+  glm::mat4 ViewProjection;
 };
 
 struct VertexDescription final {
@@ -118,6 +123,9 @@ struct FrameData final {
   vk::UniqueFence RenderFence;
   vk::UniqueCommandPool CommandPool;
   vk::UniqueCommandBuffer MainCommandBuffer;
+
+  Buffer Global_CameraBuffer;
+  vk::DescriptorSet GlobalSet;
 };
 
 class Application final {
@@ -139,6 +147,7 @@ class Application final {
   void DestroySwapchain() noexcept;
   void CreateRenderPass();
   void CreateFramebuffers();
+  void CreateDescriptors();
   void CreatePipeline();
   void CreateCommandPools();
   void CreateCommandBuffers();
@@ -181,6 +190,8 @@ class Application final {
   vk::UniquePipelineLayout mTriPipelineLayout;
   vk::UniquePipeline mBgPipeline;
   vk::UniquePipeline mTriPipeline;
+  vk::UniqueDescriptorPool mDescriptorPool;
+  vk::UniqueDescriptorSetLayout mGlobalSetLayout;
   FrameData mFrames[FRAME_OVERLAP];
 
   std::vector<RenderObject> mRenderables;

@@ -227,7 +227,7 @@ class InstanceBuilder final {
 class PipelineLayoutBuilder final {
  public:
   operator vk::PipelineLayoutCreateInfo() {
-    return vk::PipelineLayoutCreateInfo({}, {}, PushConstants);
+    return vk::PipelineLayoutCreateInfo({}, DescriptorSetLayouts, PushConstants);
   }
 
   template <typename T>
@@ -237,7 +237,14 @@ class PipelineLayoutBuilder final {
     return *this;
   }
 
+  PipelineLayoutBuilder& AddSetLayout(const vk::DescriptorSetLayout layout) {
+    DescriptorSetLayouts.push_back(layout);
+
+    return *this;
+  }
+
   std::vector<vk::PushConstantRange> PushConstants;
+  std::vector<vk::DescriptorSetLayout> DescriptorSetLayouts;
 };
 
 class PipelineBuilder final {
@@ -405,13 +412,22 @@ void Application::Render() {
       0.1f, 1000.0f)};
   proj[1][1] *= -1;
   const glm::mat4 viewProj{proj * view};
-  GlobalPushConstants globalConstants{viewProj};
+  const GlobalDescriptor_Camera global_Camera{view, proj, viewProj};
+
+  void* data{mDevice->mapMemory(frame.Global_CameraBuffer.Memory.get(), 0,
+                                frame.Global_CameraBuffer.Size)};
+  memcpy(data, &global_Camera, sizeof(global_Camera));
+  mDevice->unmapMemory(frame.Global_CameraBuffer.Memory.get());
+
+  GlobalPushConstants globalConstants;
 
   std::shared_ptr<Material> lastMaterial;
   std::shared_ptr<Mesh> lastMesh;
   for (const auto& obj : mRenderables) {
     if (obj.Material != lastMaterial) {
       cmd->bindPipeline(vk::PipelineBindPoint::eGraphics, obj.Material->Pipeline.get()->get());
+      cmd->bindDescriptorSets(vk::PipelineBindPoint::eGraphics, obj.Material->Layout.get()->get(),
+                              0, frame.GlobalSet, nullptr);
       lastMaterial = obj.Material;
     }
     if (obj.Mesh != lastMesh) {
@@ -489,6 +505,8 @@ void Application::InitializeVulkan() {
 
   CreateFramebuffers();
   Log::Debug("[InitializeVulkan] Vulkan Framebuffers created.");
+
+  CreateDescriptors();
 
   CreatePipeline();
   Log::Debug("[InitializeVulkan] Vulkan Pipeline created. <{}>", static_cast<void*>(*mBgPipeline));
@@ -960,6 +978,36 @@ void Application::CreateFramebuffers() {
   }
 }
 
+void Application::CreateDescriptors() {
+  const std::vector<vk::DescriptorPoolSize> poolSizes{
+      vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer, 10)};
+  const vk::DescriptorPoolCreateInfo poolCI({}, 10, poolSizes);
+  mDescriptorPool = mDevice->createDescriptorPoolUnique(poolCI);
+
+  const vk::DescriptorSetLayoutBinding global_CameraBinding(0, vk::DescriptorType::eUniformBuffer,
+                                                            1, vk::ShaderStageFlagBits::eVertex);
+  const std::vector<vk::DescriptorSetLayoutBinding> globalBindings{global_CameraBinding};
+
+  const vk::DescriptorSetLayoutCreateInfo globalSetCI({}, globalBindings);
+  mGlobalSetLayout = mDevice->createDescriptorSetLayoutUnique(globalSetCI);
+
+  for (auto& frame : mFrames) {
+    frame.Global_CameraBuffer =
+        CreateBuffer(sizeof(GlobalDescriptor_Camera), vk::BufferUsageFlagBits::eUniformBuffer,
+                     vk::MemoryPropertyFlagBits::eHostVisible);
+
+    const vk::DescriptorSetAllocateInfo globalSetAI(mDescriptorPool.get(), mGlobalSetLayout.get());
+    auto sets{mDevice->allocateDescriptorSets(globalSetAI)};
+    frame.GlobalSet = std::move(sets[0]);
+
+    const vk::DescriptorBufferInfo global_CameraInfo(frame.Global_CameraBuffer.Handle.get(), 0,
+                                                     frame.Global_CameraBuffer.Size);
+    const vk::WriteDescriptorSet global_CameraWrite(
+        frame.GlobalSet, 0u, 0u, vk::DescriptorType::eUniformBuffer, nullptr, global_CameraInfo);
+    mDevice->updateDescriptorSets(global_CameraWrite, nullptr);
+  }
+}
+
 void Application::CreatePipeline() {
   auto bgVertShader{CreateShaderModule("../Shaders/Basic.vert.spv")};
   auto bgFragShader{CreateShaderModule("../Shaders/Basic.frag.spv")};
@@ -967,6 +1015,7 @@ void Application::CreatePipeline() {
   auto triFragShader{CreateShaderModule("../Shaders/Tri.frag.spv")};
 
   PipelineLayoutBuilder pipelineLayout;
+  pipelineLayout.AddSetLayout(mGlobalSetLayout.get());
   std::shared_ptr<vk::UniquePipelineLayout> bgLayout{std::make_shared<vk::UniquePipelineLayout>(
       mDevice->createPipelineLayoutUnique(pipelineLayout))};
 
