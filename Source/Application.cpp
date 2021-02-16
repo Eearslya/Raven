@@ -224,6 +224,22 @@ class InstanceBuilder final {
   std::vector<const char*> mExtensions;
 };
 
+class PipelineLayoutBuilder final {
+ public:
+  operator vk::PipelineLayoutCreateInfo() {
+    return vk::PipelineLayoutCreateInfo({}, {}, PushConstants);
+  }
+
+  template <typename T>
+  PipelineLayoutBuilder& AddPushConstant(vk::ShaderStageFlags stages, uint32_t offset = 0) {
+    PushConstants.emplace_back(stages, offset, static_cast<uint32_t>(sizeof(T)));
+
+    return *this;
+  }
+
+  std::vector<vk::PushConstantRange> PushConstants;
+};
+
 class PipelineBuilder final {
  public:
   PipelineBuilder(vk::Extent2D extent) {
@@ -270,7 +286,24 @@ class PipelineBuilder final {
     return *this;
   }
 
+  template <typename T>
+  PipelineBuilder& SetVertexInput() {
+    VertexInfo = T::GetVertexDescription();
+    VertexInput =
+        vk::PipelineVertexInputStateCreateInfo({}, VertexInfo.Bindings, VertexInfo.Attributes);
+
+    return *this;
+  }
+
+  PipelineBuilder& EnableDepthBuffer() {
+    DepthStencil = vk::PipelineDepthStencilStateCreateInfo({}, true, true, vk::CompareOp::eLess,
+                                                           false, false, {}, {}, 0.0f, 1.0f);
+
+    return *this;
+  }
+
   std::vector<vk::PipelineShaderStageCreateInfo> ShaderStages;
+  VertexDescription VertexInfo;
   vk::PipelineVertexInputStateCreateInfo VertexInput;
   vk::PipelineInputAssemblyStateCreateInfo InputAssembly;
   vk::PipelineTessellationStateCreateInfo Tesselation;
@@ -338,13 +371,15 @@ void Application::Run() {
  * ========================================================================================== */
 
 void Application::Render() {
-  mDevice->waitForFences(*mRenderFence, true, std::numeric_limits<uint64_t>::max());
-  mDevice->resetFences(*mRenderFence);
+  FrameData& frame{mFrames[mCurrentFrame % FRAME_OVERLAP]};
+
+  mDevice->waitForFences(*frame.RenderFence, true, std::numeric_limits<uint64_t>::max());
+  mDevice->resetFences(*frame.RenderFence);
 
   uint32_t imageIndex{mDevice->acquireNextImageKHR(
-      *mSwapchain.Swapchain, std::numeric_limits<uint64_t>::max(), *mPresentSemaphore)};
+      *mSwapchain.Swapchain, std::numeric_limits<uint64_t>::max(), *frame.PresentSemaphore)};
 
-  const vk::UniqueCommandBuffer& cmd{mGraphicsBuffers[imageIndex]};
+  const vk::UniqueCommandBuffer& cmd{frame.MainCommandBuffer};
 
   const vk::CommandBufferBeginInfo beginInfo;
   cmd->begin(beginInfo);
@@ -356,23 +391,56 @@ void Application::Render() {
                                        {{0, 0}, mSwapchain.Extent}, clearValues);
   cmd->beginRenderPass(rpInfo, vk::SubpassContents::eInline);
 
-  cmd->bindPipeline(vk::PipelineBindPoint::eGraphics, *mBgPipeline);
-  cmd->draw(3, 1, 0, 0);
+  const std::shared_ptr<Material> bgMat{GetMaterial("background")};
+  if (bgMat) {
+    cmd->bindPipeline(vk::PipelineBindPoint::eGraphics, bgMat->Pipeline.get()->get());
+    cmd->draw(3, 1, 0, 0);
+  }
+
+  const glm::vec3 camPos(0, 4, -10);
+  const glm::mat4 view{glm::lookAt(camPos, glm::vec3(0), glm::vec3(0, 1, 0))};
+  glm::mat4 proj{glm::perspective(
+      glm::radians(70.0f),
+      static_cast<float>(mSwapchain.Extent.width) / static_cast<float>(mSwapchain.Extent.height),
+      0.1f, 1000.0f)};
+  proj[1][1] *= -1;
+  const glm::mat4 viewProj{proj * view};
+  GlobalPushConstants globalConstants{viewProj};
+
+  std::shared_ptr<Material> lastMaterial;
+  std::shared_ptr<Mesh> lastMesh;
+  for (const auto& obj : mRenderables) {
+    if (obj.Material != lastMaterial) {
+      cmd->bindPipeline(vk::PipelineBindPoint::eGraphics, obj.Material->Pipeline.get()->get());
+      lastMaterial = obj.Material;
+    }
+    if (obj.Mesh != lastMesh) {
+      cmd->bindVertexBuffers(0, obj.Mesh->VertexBuffer.Handle.get(), vk::DeviceSize(0));
+      lastMesh = obj.Mesh;
+    }
+
+    globalConstants.Model = obj.Transform;
+    cmd->pushConstants<GlobalPushConstants>(obj.Material->Layout.get()->get(),
+                                            vk::ShaderStageFlagBits::eVertex, 0, globalConstants);
+    cmd->draw(obj.Mesh->VertexCount, 1, 0, 0);
+  }
 
   cmd->endRenderPass();
 
   cmd->end();
 
-  const std::vector<vk::Semaphore> waitSemaphores{*mPresentSemaphore};
-  const std::vector<vk::Semaphore> signalSemaphores{*mRenderSemaphore};
+  const std::vector<vk::Semaphore> waitSemaphores{*frame.PresentSemaphore};
+  const std::vector<vk::Semaphore> signalSemaphores{*frame.RenderSemaphore};
   const std::vector<vk::PipelineStageFlags> waitStages{
       vk::PipelineStageFlagBits::eColorAttachmentOutput};
   const std::vector<vk::CommandBuffer> cmdBuffers{*cmd};
   const vk::SubmitInfo submitInfo(waitSemaphores, waitStages, cmdBuffers, signalSemaphores);
-  mGraphicsQueue.submit(submitInfo, *mRenderFence);
+  mGraphicsQueue.submit(submitInfo, *frame.RenderFence);
 
   const vk::PresentInfoKHR presentInfo(signalSemaphores, *mSwapchain.Swapchain, imageIndex);
   mGraphicsQueue.presentKHR(presentInfo);
+
+  mCurrentFrame++;
 }
 
 /* ==========================================================================================
@@ -893,42 +961,92 @@ void Application::CreateFramebuffers() {
 }
 
 void Application::CreatePipeline() {
-  auto bgVertShader{CreateShaderModule("../Shaders/Basic.vert.glsl.spv")};
-  auto bgFragShader{CreateShaderModule("../Shaders/Basic.frag.glsl.spv")};
+  auto bgVertShader{CreateShaderModule("../Shaders/Basic.vert.spv")};
+  auto bgFragShader{CreateShaderModule("../Shaders/Basic.frag.spv")};
+  auto triVertShader{CreateShaderModule("../Shaders/Tri.vert.spv")};
+  auto triFragShader{CreateShaderModule("../Shaders/Tri.frag.spv")};
 
-  const vk::PipelineLayoutCreateInfo pipelineLayoutCI;
-  mPipelineLayout = mDevice->createPipelineLayoutUnique(pipelineLayoutCI);
+  PipelineLayoutBuilder pipelineLayout;
+  std::shared_ptr<vk::UniquePipelineLayout> bgLayout{std::make_shared<vk::UniquePipelineLayout>(
+      mDevice->createPipelineLayoutUnique(pipelineLayout))};
+
+  pipelineLayout.AddPushConstant<GlobalPushConstants>(vk::ShaderStageFlagBits::eVertex);
+  std::shared_ptr<vk::UniquePipelineLayout> triLayout{std::make_shared<vk::UniquePipelineLayout>(
+      mDevice->createPipelineLayoutUnique(pipelineLayout))};
 
   PipelineBuilder builder(mSwapchain.Extent);
-  builder.Layout = *mPipelineLayout;
+  builder.Layout = bgLayout.get()->get();
   builder.RenderPass = *mRenderPass;
   builder.AddShader(vk::ShaderStageFlagBits::eVertex, *bgVertShader)
       .AddShader(vk::ShaderStageFlagBits::eFragment, *bgFragShader);
-  mBgPipeline = mDevice->createGraphicsPipelineUnique({}, builder);
+  std::shared_ptr<vk::UniquePipeline> bgPipeline{std::make_shared<vk::UniquePipeline>(
+      mDevice->createGraphicsPipelineUnique({}, builder).value)};
+
+  builder.Layout = triLayout.get()->get();
+  builder.ClearShaders()
+      .AddShader(vk::ShaderStageFlagBits::eVertex, *triVertShader)
+      .AddShader(vk::ShaderStageFlagBits::eFragment, *triFragShader)
+      .SetVertexInput<Vertex>()
+      .EnableDepthBuffer();
+  std::shared_ptr<vk::UniquePipeline> triPipeline{std::make_shared<vk::UniquePipeline>(
+      mDevice->createGraphicsPipelineUnique({}, builder).value)};
+
+  CreateMaterial(bgLayout, bgPipeline, "background");
+  CreateMaterial(triLayout, triPipeline, "default");
 }
 
 void Application::CreateCommandPools() {
   const vk::CommandPoolCreateInfo graphicsPoolCI(vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
                                                  mDeviceInfo.GraphicsIndex.value());
-  mGraphicsPool = mDevice->createCommandPoolUnique(graphicsPoolCI);
+  for (auto& frame : mFrames) {
+    frame.CommandPool = mDevice->createCommandPoolUnique(graphicsPoolCI);
+  }
 }
 
 void Application::CreateCommandBuffers() {
-  const vk::CommandBufferAllocateInfo cmdAI(*mGraphicsPool, vk::CommandBufferLevel::ePrimary,
-                                            mSwapchain.ImageCount);
-  mGraphicsBuffers = mDevice->allocateCommandBuffersUnique(cmdAI);
+  for (auto& frame : mFrames) {
+    const vk::CommandBufferAllocateInfo cmdAI(*frame.CommandPool, vk::CommandBufferLevel::ePrimary,
+                                              1);
+    auto cmdBufs{mDevice->allocateCommandBuffersUnique(cmdAI)};
+    frame.MainCommandBuffer = std::move(cmdBufs[0]);
+  }
 }
 
 void Application::CreateSyncObjects() {
   const vk::SemaphoreCreateInfo semaphoreCI;
   const vk::FenceCreateInfo fenceCI(vk::FenceCreateFlagBits::eSignaled);
 
-  mRenderSemaphore = mDevice->createSemaphoreUnique(semaphoreCI);
-  mPresentSemaphore = mDevice->createSemaphoreUnique(semaphoreCI);
-  mRenderFence = mDevice->createFenceUnique(fenceCI);
+  for (auto& frame : mFrames) {
+    frame.RenderSemaphore = mDevice->createSemaphoreUnique(semaphoreCI);
+    frame.PresentSemaphore = mDevice->createSemaphoreUnique(semaphoreCI);
+    frame.RenderFence = mDevice->createFenceUnique(fenceCI);
+  }
 }
 
-void Application::CreateScene() {}
+void Application::CreateScene() {
+  const std::vector<Vertex> triVerts{Vertex{glm::vec3(1, 1, 0)}, Vertex{glm::vec3(-1, 1, 0)},
+                                     Vertex{glm::vec3(0, -1, 0)}};
+  auto triangle{std::make_shared<Mesh>(3, CreateVertexBuffer(triVerts))};
+  mMeshes["triangle"] = triangle;
+
+  mMeshes["suzanne"] = LoadMesh("../Assets/Models/Suzanne.gltf");
+
+  RenderObject suzanne{GetMesh("suzanne"), GetMaterial("default"),
+                       glm::rotate(glm::mat4(1.0f), glm::radians(180.0f), glm::vec3(0, 1, 0))};
+  mRenderables.push_back(suzanne);
+
+  std::shared_ptr<Mesh> tri{GetMesh("triangle")};
+  std::shared_ptr<Material> triMat{GetMaterial("default")};
+  for (int x = -20; x <= 20; x++) {
+    for (int z = -20; z <= 20; z++) {
+      const glm::mat4 scale{glm::scale(glm::mat4(1.0f), glm::vec3(0.2f, 0.2f, 0.2f))};
+      const glm::mat4 translate{glm::translate(glm::mat4(1.0f), glm::vec3(x, 0, z))};
+      const glm::mat4 xf{translate * scale};
+      RenderObject obj{tri, triMat, xf};
+      mRenderables.push_back(obj);
+    }
+  }
+}
 
 /* ==========================================================================================
  * Application Helper Methods
@@ -950,6 +1068,68 @@ Buffer Application::CreateBuffer(const vk::DeviceSize size, vk::BufferUsageFlags
   mDevice->bindBufferMemory(*buffer, *memory, 0);
 
   return Buffer(std::move(buffer), std::move(memory), require.size);
+}
+
+Buffer Application::CreateVertexBuffer(const std::vector<Vertex>& vertices) {
+  const vk::DeviceSize bufSize{vertices.size() * sizeof(Vertex)};
+  Buffer buf{CreateBuffer(
+      bufSize, vk::BufferUsageFlagBits::eVertexBuffer,
+      vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent)};
+
+  void* data{mDevice->mapMemory(*buf.Memory, 0, bufSize)};
+  memcpy(data, vertices.data(), bufSize);
+  mDevice->unmapMemory(*buf.Memory);
+
+  return std::move(buf);
+}
+
+std::shared_ptr<Mesh> Application::LoadMesh(const std::string& path) {
+  tinygltf::Model model;
+  tinygltf::TinyGLTF loader;
+  std::string err;
+  std::string warn;
+
+  bool ret = loader.LoadASCIIFromFile(&model, &err, &warn, path.c_str());
+
+  if (!warn.empty()) {
+    Log::Warn("Warn: %s\n", warn.c_str());
+  }
+
+  if (!err.empty()) {
+    Log::Error("Err: %s\n", err.c_str());
+  }
+
+  if (!ret) {
+    Log::Error("Failed to parse glTF model {}", path);
+    return nullptr;
+  }
+
+  std::vector<Vertex> vertices;
+  for (const auto& m : model.meshes) {
+    for (const auto& p : m.primitives) {
+      const tinygltf::Accessor& pos{model.accessors[p.attributes.find("POSITION")->second]};
+      const tinygltf::BufferView& posBufView{model.bufferViews[pos.bufferView]};
+      const tinygltf::Buffer& posBuf = model.buffers[posBufView.buffer];
+      const float* positions =
+          reinterpret_cast<const float*>(&posBuf.data[posBufView.byteOffset + pos.byteOffset]);
+
+      const tinygltf::Accessor& norm{model.accessors[p.attributes.find("NORMAL")->second]};
+      const tinygltf::BufferView& normalBufView{model.bufferViews[norm.bufferView]};
+      const tinygltf::Buffer& normalBuf = model.buffers[normalBufView.buffer];
+      const float* normals = reinterpret_cast<const float*>(
+          &normalBuf.data[normalBufView.byteOffset + norm.byteOffset]);
+
+      for (size_t i = 0; i < pos.count; i++) {
+        vertices.push_back(
+            Vertex{glm::vec3{positions[i * 3 + 0], positions[i * 3 + 1], positions[i * 3 + 2]},
+                   glm::vec3{normals[i * 3 + 0], normals[i * 3 + 1], normals[i * 3 + 2]}});
+      }
+    }
+  }
+
+  Buffer buffer{CreateVertexBuffer(vertices)};
+
+  return std::make_shared<Mesh>(static_cast<uint32_t>(vertices.size()), std::move(buffer));
 }
 
 uint32_t Application::FindMemoryType(uint32_t filter, vk::MemoryPropertyFlags properties) {
@@ -992,6 +1172,38 @@ vk::UniqueShaderModule Application::CreateShaderModule(const std::string& path) 
   return mDevice->createShaderModuleUnique(shaderModuleCI);
 }
 
+std::shared_ptr<Material> Application::CreateMaterial(
+    const std::shared_ptr<vk::UniquePipelineLayout> layout,
+    const std::shared_ptr<vk::UniquePipeline> pipeline, const std::string& name) {
+  auto existing{mMaterials.find(name)};
+  if (existing != mMaterials.end()) {
+    return existing->second;
+  }
+
+  std::shared_ptr<Material> newMat{std::make_shared<Material>(layout, pipeline)};
+  mMaterials[name] = newMat;
+
+  return newMat;
+}
+
+std::shared_ptr<Material> Application::GetMaterial(const std::string& name) {
+  auto existing{mMaterials.find(name)};
+  if (existing != mMaterials.end()) {
+    return existing->second;
+  }
+
+  return nullptr;
+}
+
+std::shared_ptr<Mesh> Application::GetMesh(const std::string& name) {
+  auto existing{mMeshes.find(name)};
+  if (existing != mMeshes.end()) {
+    return existing->second;
+  }
+
+  return nullptr;
+}
+
 /* ==========================================================================================
  * Helper Class Methods
  * ========================================================================================== */
@@ -1014,4 +1226,23 @@ Buffer& Buffer::operator=(Buffer&& o) {
 }
 
 Buffer::~Buffer() {}
+
+VertexDescription Vertex::GetVertexDescription() {
+  const std::vector<vk::VertexInputBindingDescription> bindings{
+      vk::VertexInputBindingDescription(0, sizeof(Vertex), vk::VertexInputRate::eVertex)};
+
+  const std::vector<vk::VertexInputAttributeDescription> attributes{
+      vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32B32Sfloat,
+                                          offsetof(Vertex, Position)),
+      vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32B32Sfloat,
+                                          offsetof(Vertex, Normal))};
+
+  return VertexDescription{attributes, bindings};
+}
+
+Mesh::Mesh(uint32_t count, Buffer&& buffer) : VertexCount(count), VertexBuffer(std::move(buffer)) {}
+
+Material::Material(std::shared_ptr<vk::UniquePipelineLayout> layout,
+                   std::shared_ptr<vk::UniquePipeline> pipeline)
+    : Layout(layout), Pipeline(pipeline) {}
 }  // namespace Raven
