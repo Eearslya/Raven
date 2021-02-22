@@ -1,0 +1,13 @@
+BasedOnStyle: Google
+Language: Cpp
+Standard: c++20
+
+AlwaysBreakTemplateDeclarations: Yes
+BinPackParameters: false
+BreakConstructorInitializers: AfterColon
+ColumnLimit: 100
+ConstructorInitializerAllOnOneLineOrOnePerLine: true
+DerivePointerAlignment: false
+IndentWidth: 2
+PenaltyReturnTypeOnItsOwnLine: 10000
+PointerAlignment: Left
