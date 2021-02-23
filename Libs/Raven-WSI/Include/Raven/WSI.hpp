@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <set>
 #include <string>
+#include <tuple>
 
 namespace Raven {
 struct Keyboard {
@@ -36,7 +37,13 @@ RAVEN_WSI_EXPORT bool CreateWindow(unsigned int width,
                                    const std::string& title);
 RAVEN_WSI_EXPORT void DestroyWindow();
 
-RAVEN_WSI_EXPORT bool WindowShouldClose();
+RAVEN_WSI_EXPORT std::string WindowGetTitle();
+RAVEN_WSI_EXPORT void WindowSetTitle(const std::string& title);
+RAVEN_WSI_EXPORT bool WindowGetShouldClose();
+RAVEN_WSI_EXPORT void WindowSetShouldClose(bool close);
+RAVEN_WSI_EXPORT std::tuple<unsigned int, unsigned int> WindowGetSize();
+RAVEN_WSI_EXPORT void WindowSetSize(unsigned int width, unsigned int height);
+
 RAVEN_WSI_EXPORT void WindowEventProcessing();
 
 RAVEN_WSI_EXPORT bool WindowResized();

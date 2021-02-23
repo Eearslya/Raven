@@ -20,6 +20,7 @@ void WindowCursorButtonCallback(GLFWwindow*, int button, int action, int mods);
 std::once_flag gGlfwInitialized;
 GLFWwindow* gWindow{nullptr};
 bool gWindowResized{false};
+std::string gWindowTitle;
 Keyboard gKeyboard;
 Mouse gMouse;
 
@@ -53,6 +54,7 @@ bool CreateWindow(unsigned int width, unsigned int height, const std::string& ti
 
   std::call_once(gGlfwInitialized, glfwInitOnce);
 
+  gWindowTitle = title;
   gWindow = glfwCreateWindow(width, height, title.c_str(), nullptr, nullptr);
 
   glfwSetKeyCallback(gWindow, WindowKeyCallback);
@@ -73,7 +75,28 @@ void DestroyWindow() {
   gWindow = nullptr;
 }
 
-bool WindowShouldClose() { return glfwWindowShouldClose(gWindow); }
+RAVEN_WSI_EXPORT std::string WindowGetTitle() { return gWindowTitle; }
+
+RAVEN_WSI_EXPORT void WindowSetTitle(const std::string& title) {
+  glfwSetWindowTitle(gWindow, title.c_str());
+  gWindowTitle = title;
+}
+
+bool WindowGetShouldClose() { return glfwWindowShouldClose(gWindow); }
+
+RAVEN_WSI_EXPORT void WindowSetShouldClose(bool close) {
+  glfwSetWindowShouldClose(gWindow, close ? GLFW_TRUE : GLFW_FALSE);
+}
+
+RAVEN_WSI_EXPORT std::tuple<unsigned int, unsigned int> WindowGetSize() {
+  int width, height;
+  glfwGetWindowSize(gWindow, &width, &height);
+  return std::make_tuple(static_cast<unsigned int>(width), static_cast<unsigned int>(height));
+}
+
+RAVEN_WSI_EXPORT void WindowSetSize(unsigned int width, unsigned int height) {
+  glfwSetWindowSize(gWindow, width, height);
+}
 
 void WindowEventProcessing() {
   KeyboardPreProcessing(gKeyboard);
