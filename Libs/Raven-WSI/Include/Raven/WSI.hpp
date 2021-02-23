@@ -1,5 +1,7 @@
 #pragma once
 
+#include <Raven/WSI_Export.h>
+
 #include <cstdint>
 #include <set>
 #include <string>
@@ -29,14 +31,16 @@ struct Mouse {
   std::set<uint32_t> HeldButtons;
 };
 
-bool CreateWindow(unsigned int width, unsigned int height, const std::string& title);
-void DestroyWindow();
+RAVEN_WSI_EXPORT bool CreateWindow(unsigned int width,
+                                   unsigned int height,
+                                   const std::string& title);
+RAVEN_WSI_EXPORT void DestroyWindow();
 
-bool WindowShouldClose();
-void WindowEventProcessing();
+RAVEN_WSI_EXPORT bool WindowShouldClose();
+RAVEN_WSI_EXPORT void WindowEventProcessing();
 
-bool WindowResized();
+RAVEN_WSI_EXPORT bool WindowResized();
 
-const Keyboard& GetKeyboard();
-const Mouse& GetMouse();
+RAVEN_WSI_EXPORT const Keyboard& GetKeyboard();
+RAVEN_WSI_EXPORT const Mouse& GetMouse();
 }  // namespace Raven
