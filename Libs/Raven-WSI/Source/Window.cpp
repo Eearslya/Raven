@@ -54,6 +54,8 @@ bool CreateWindow(unsigned int width, unsigned int height, const std::string& ti
 
   std::call_once(gGlfwInitialized, glfwInitOnce);
 
+  glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+
   gWindowTitle = title;
   gWindow = glfwCreateWindow(width, height, title.c_str(), nullptr, nullptr);
 
@@ -110,4 +112,17 @@ bool WindowResized() { return gWindowResized; }
 const Keyboard& GetKeyboard() { return gKeyboard; }
 
 const Mouse& GetMouse() { return gMouse; }
+
+const std::vector<const char*> WindowGetVulkanExtensions() {
+  std::call_once(gGlfwInitialized, glfwInitOnce);
+
+  if (!glfwVulkanSupported()) {
+    return {};
+  }
+
+  uint32_t extensionCount;
+  const char** extensions{glfwGetRequiredInstanceExtensions(&extensionCount)};
+
+  return std::vector(extensions, extensions + extensionCount);
+}
 }  // namespace Raven

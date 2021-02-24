@@ -14,9 +14,13 @@ set(CMAKE_VISIBILITY_INLINES_HIDDEN 1)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/Bin)
 
 add_subdirectory(External)
+include(External/CMakePackages.cmake)
+
+add_compile_definitions(GLFW_INCLUDE_VULKAN)
+
 add_subdirectory(Libs)
 
 add_executable(Raven)
 
 add_subdirectory(Raven)
-target_link_libraries(Raven PRIVATE Raven-WSI)
+target_link_libraries(Raven PRIVATE Raven-Graphics Raven-WSI)

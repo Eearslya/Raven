@@ -6,6 +6,7 @@
 #include <set>
 #include <string>
 #include <tuple>
+#include <vector>
 
 namespace Raven {
 struct Keyboard {
@@ -50,4 +51,5 @@ RAVEN_WSI_EXPORT bool WindowResized();
 
 RAVEN_WSI_EXPORT const Keyboard& GetKeyboard();
 RAVEN_WSI_EXPORT const Mouse& GetMouse();
+RAVEN_WSI_EXPORT const std::vector<const char*> WindowGetVulkanExtensions();
 }  // namespace Raven

@@ -11,4 +11,4 @@ add_subdirectory(Source)
 
 generate_export_header(Raven-WSI EXPORT_FILE_NAME ${CMAKE_CURRENT_BINARY_DIR}/Exports/Raven/WSI_Export.h)
 target_include_directories(Raven-WSI PUBLIC Include ${CMAKE_CURRENT_BINARY_DIR}/Exports)
-target_link_libraries(Raven-WSI PUBLIC glfw)
+target_link_libraries(Raven-WSI PUBLIC glfw Vulkan::Vulkan)
