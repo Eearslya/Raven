@@ -10,7 +10,43 @@ Logger& Logger::Instance() {
 }
 
 void Logger::Log(Category& cat, Level lvl, std::string_view msg) {
-  std::cout << cat.Name() << " : " << std::to_string(lvl) << " : " << msg << '\n';
+  if (lvl > cat.MaxLevel()) {
+    return;
+  }
+
+  const std::scoped_lock lock{mSinkLock};
+  const std::string logMsg{fmt::format("[{}-{}] {}", std::to_string(lvl), cat.Name(), msg)};
+
+  for (const auto& sink : mSinks) {
+    sink->Output(logMsg);
+  }
+}
+
+bool Logger::RegisterSink(const std::shared_ptr<Sink>& sink) {
+  const std::scoped_lock lock{mSinkLock};
+
+  for (const auto& s : mSinks) {
+    if (s == sink) {
+      return false;
+    }
+  }
+
+  mSinks.push_back(sink);
+
+  return true;
+}
+
+bool Logger::DeregisterSink(const std::shared_ptr<Sink>& sink) {
+  const std::scoped_lock lock{mSinkLock};
+
+  for (auto it = mSinks.begin(); it != mSinks.end(); ++it) {
+    if (sink == *it) {
+      mSinks.erase(it);
+      return true;
+    }
+  }
+
+  return false;
 }
 }  // namespace Log
 }  // namespace Raven
