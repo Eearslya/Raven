@@ -23,4 +23,4 @@ add_subdirectory(Libs)
 add_executable(Raven)
 
 add_subdirectory(Raven)
-target_link_libraries(Raven PRIVATE Raven-Graphics Raven-WSI)
+target_link_libraries(Raven PRIVATE Raven-Graphics Raven-Lib Raven-WSI)
